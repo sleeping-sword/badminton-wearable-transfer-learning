@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Android
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+app/build/
+
+# Garmin / Build outputs
+bin/
+gen/
+*.prg
+*.iq
+
+# OS
+.DS_Store
+Thumbs.db
+
