@@ -26,3 +26,8 @@ gen/
 .DS_Store
 Thumbs.db
 
+
+# AI-Badminton-111
+**/grade_and_comment_separate.json
+**/挑cut.json
+**/推cut.json
