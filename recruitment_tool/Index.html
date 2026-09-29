@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 15px/1.5 "Noto Sans TC", "Microsoft JhengHei", -apple-system, Arial, sans-serif; color: #1f2328; background: #fff; }
+  button, input, select, textarea { font: inherit; }
+
+  /* 登入 */
+  .login { max-width: 360px; margin: 12vh auto 0; padding: 0 16px; }
+  .login h1 { font-size: 20px; margin: 0 0 16px; }
+  .login input { width: 100%; padding: 10px 12px; margin-bottom: 10px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 16px; }
+  .login button { width: 100%; padding: 10px; }
+  .err { color: #cf222e; margin-top: 8px; min-height: 1.5em; }
+
+  /* 主畫面 */
+  .app { display: none; height: 100vh; height: 100dvh; }
+  .app.show { display: flex; }
+  .side { width: 340px; flex-shrink: 0; border-right: 1px solid #d0d7de; display: flex; flex-direction: column; }
+  .side-head { padding: 10px; border-bottom: 1px solid #d0d7de; }
+  .side-head input[type=text] { width: 100%; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 16px; }
+  .side-head .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; font-size: 13px; color: #57606a; flex-wrap: wrap; }
+  .list { overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
+  .item { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid #eaeef2; background: none; padding: 10px 12px; cursor: pointer; color: inherit; }
+  .item:hover { background: #f6f8fa; }
+  .item.active { background: #ddf4ff; }
+  .item .name { font-weight: 600; }
+  .item .sub { font-size: 13px; color: #57606a; }
+  .badge { display: inline-block; font-size: 12px; padding: 0 6px; border-radius: 10px; margin-left: 4px; vertical-align: 1px; }
+  .b-done { background: #dafbe1; color: #1a7f37; }
+  .b-warn { background: #fff8c5; color: #9a6700; }
+  .main { flex: 1; overflow-y: auto; padding: 16px 20px 40px; -webkit-overflow-scrolling: touch; min-width: 0; }
+  .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .top .spacer { flex: 1; }
+  h2 { margin: 0 0 4px; font-size: 18px; }
+  h3 { margin: 20px 0 8px; font-size: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border: 1px solid #d0d7de; padding: 6px 8px; vertical-align: top; text-align: left; word-break: break-word; }
+  th { background: #f6f8fa; width: 32%; font-weight: 600; }
+  .summary th { width: auto; }
+  .summary td.num { text-align: right; }
+  .warn { background: #fff8c5; border: 1px solid #d4a72c; padding: 6px 10px; border-radius: 6px; margin: 6px 0; }
+  .status { color: #1a7f37; margin: 4px 0; }
+  label.f { display: block; font-size: 13px; color: #57606a; margin: 10px 0 2px; }
+  select, .main input[type=text], textarea { width: 100%; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 16px; background: #fff; }
+  .readonly { padding: 8px 10px; background: #f6f8fa; border-radius: 8px; word-break: break-all; }
+  textarea { height: 320px; resize: vertical; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+  .btn { padding: 8px 14px; border-radius: 8px; border: 1px solid #d0d7de; background: #f6f8fa; cursor: pointer; color: inherit; }
+  .btn.sm { padding: 3px 10px; }
+  .primary { background: #1f883d; color: #fff; border-color: #1a7f37; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .msg { color: #57606a; }
+  .muted { color: #57606a; }
+  .back-list { display: none; }
+  .b-slot { background: #ddf4ff; color: #0969da; }
+  .b-reply { background: #fbefff; color: #8250df; }
+  .reply { border: 1px solid #d0d7de; border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+  .reply .meta { font-size: 13px; color: #57606a; display: flex; gap: 8px; flex-wrap: wrap; }
+  .reply .body { white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
+  .tt td.time { white-space: nowrap; width: 110px; }
+  .tt td.email { color: #57606a; font-size: 13px; }
+  .tt td.check { white-space: nowrap; width: 80px; text-align: center; }
+  .tt tr.free td { color: #8c959f; }
+  .tt tr.changed td { background: #fff8c5; }
+  .tt th { width: auto; }
+  .tt select { padding: 4px 6px; font-size: 15px; }
+  .date-head { display: flex; align-items: baseline; gap: 8px; }
+  .date-head .muted { font-size: 13px; }
+  .editbar { position: sticky; top: -16px; background: #fff; padding: 8px 0; z-index: 1; border-bottom: 1px solid #d0d7de; margin-bottom: 8px; }
+
+  /* 手機：列表與詳細頁切換顯示 */
+  @media (max-width: 760px) {
+    .side { width: 100%; border-right: 0; }
+    .main { display: none; padding: 12px 16px 40px; }
+    .app.detail .side { display: none; }
+    .app.detail .main { display: block; }
+    .back-list { display: inline-block; }
+    th { width: 38%; }
+    .actions .btn { flex: 1 1 auto; }
+  }
+</style>
+</head>
+<body>
+
+<div class="login" id="loginView" style="display:none">
+  <h1>受試者資料與邀請信</h1>
+  <form id="loginForm">
+    <input id="user" type="text" placeholder="帳號" autocomplete="username" autocapitalize="off">
+    <input id="pass" type="password" placeholder="密碼" autocomplete="current-password">
+    <button class="btn primary" type="submit" id="loginBtn">登入</button>
+  </form>
+  <div class="err" id="loginErr"></div>
+</div>
+
+<div class="app" id="app">
+  <div class="side">
+    <div class="side-head">
+      <input id="search" type="text" placeholder="搜尋姓名、系級、學號、Email…">
+      <div class="row">
+        <label><input type="checkbox" id="hideDone"> 隱藏已通知</label>
+        <span id="count"></span>
+        <span style="flex:1"></span>
+        <button class="btn sm" id="summaryBtn">時段總覽</button>
+        <button class="btn sm" id="ttBtn">時段表</button>
+        <button class="btn sm" id="reload">重新整理</button>
+        <button class="btn sm" id="logoutBtn">登出</button>
+      </div>
+    </div>
+    <div class="list" id="list"></div>
+  </div>
+  <div class="main" id="main"></div>
+</div>
+
+<script>
+  let TOKEN = null;
+  let DATA = null;
+  let current = null;
+
+  // ── 小工具 ──
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function dateKey(s) {
+    const m = String(s || '').match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    return m ? m[1] + '/' + ('0' + m[2]).slice(-2) + '/' + ('0' + m[3]).slice(-2) : '';
+  }
+  function shortHeader(h) {
+    const first = String(h).split('\n')[0];
+    return first.length > 40 ? first.slice(0, 40) + '…' : first;
+  }
+  function saveToken(t) { try { t ? sessionStorage.setItem('token', t) : sessionStorage.removeItem('token'); } catch (e) {} }
+  function loadToken() { try { return sessionStorage.getItem('token'); } catch (e) { return null; } }
+
+  /** 呼叫後端；登入過期時自動回到登入畫面 */
+  function call(fn, args, ok, fail) {
+    google.script.run
+      .withSuccessHandler(ok)
+      .withFailureHandler(e => {
+        if (String(e.message).includes('SESSION_EXPIRED')) { showLogin('登入已過期，請重新登入'); return; }
+        (fail || (err => alert(err.message)))(e);
+      })[fn](TOKEN, ...args);
+  }
+
+  // ── 登入 ──
+  function showLogin(message) {
+    TOKEN = null; saveToken(null); DATA = null; current = null;
+    document.getElementById('app').classList.remove('show');
+    document.getElementById('loginView').style.display = '';
+    document.getElementById('loginErr').textContent = message || '';
+    document.getElementById('pass').value = '';
+  }
+  function showApp() {
+    document.getElementById('loginView').style.display = 'none';
+    document.getElementById('app').classList.add('show');
+    load();
+  }
+  document.getElementById('loginForm').onsubmit = e => {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true;
+    document.getElementById('loginErr').textContent = '';
+    google.script.run
+      .withSuccessHandler(t => { btn.disabled = false; TOKEN = t; saveToken(t); showApp(); })
+      .withFailureHandler(err => { btn.disabled = false; document.getElementById('loginErr').textContent = err.message; })
+      .login(document.getElementById('user').value, document.getElementById('pass').value);
+  };
+  document.getElementById('logoutBtn').onclick = () => {
+    const t = TOKEN;
+    showLogin();
+    google.script.run.logout(t);
+  };
+
+  // ── 資料 ──
+  let view = 'summary'; // 'summary' | 'timetable' | 'person'
+  let REPLY_COUNTS = {}; // {回覆列號: 回信數}
+  let ttDraft = null;   // 時段表編輯中的 {slotId: {row, confirmed}}
+
+  function load() {
+    document.getElementById('list').innerHTML = '<div class="muted" style="padding:12px">讀取中…</div>';
+    call('getData', [], d => {
+      DATA = d;
+      if (current) current = DATA.participants.find(p => p.row === current.row) || null;
+      renderList();
+      if (view === 'person' && current) select(current.row);
+      else if (view === 'timetable') renderTimetable();
+      else renderSummary();
+      loadReplyCounts();
+    }, e => { document.getElementById('list').innerHTML = '<div class="warn">讀取失敗：' + esc(e.message) + '</div>'; });
+  }
+
+  /** 背景讀取各受試者的回信數（Gmail 搜尋較慢，不擋住畫面） */
+  function loadReplyCounts() {
+    call('getReplyCounts', [], counts => {
+      REPLY_COUNTS = counts || {};
+      renderList();
+      updateReplyButton();
+    }, () => {});
+  }
+
+  function updateReplyButton() {
+    const btn = document.getElementById('repliesBtn');
+    if (!btn || !current || btn.dataset.loaded) return;
+    const n = REPLY_COUNTS[current.row] || 0;
+    btn.textContent = n ? `查看回覆信（${n} 封）` : '查看回覆信';
+  }
+
+  function slotShort(id) { return String(id || '').replace(/^\d{4}\//, ''); }
+  function personByRow(row) { return DATA.participants.find(p => p.row === row); }
+
+  function renderList() {
+    const q = document.getElementById('search').value.trim().toLowerCase();
+    const hideDone = document.getElementById('hideDone').checked;
+    const items = DATA.participants.filter(p => {
+      if (hideDone && p.status) return false;
+      if (!q) return true;
+      return [p.name, p.dept, p.studentId, p.email, p.preferred].join(' ').toLowerCase().includes(q);
+    });
+    const done = DATA.participants.filter(p => p.status).length;
+    const booked = DATA.timetable.filter(s => s.row).length;
+    const confirmed = DATA.timetable.filter(s => s.row && s.confirmed).length;
+    document.getElementById('count').textContent = `共 ${DATA.participants.length} 人・已通知 ${done}・已確認 ${confirmed}・時段 ${booked}/${DATA.timetable.length}`;
+    document.getElementById('list').innerHTML = items.map(p => `
+      <button class="item ${current && current.row === p.row ? 'active' : ''}" data-row="${p.row}">
+        <span class="name">${esc(p.name || '(未填姓名)')}</span>
+        ${p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : p.status ? '<span class="badge b-slot">已通知</span>' : ''}
+        ${REPLY_COUNTS[p.row] ? `<span class="badge b-reply">💬 ${REPLY_COUNTS[p.row]}</span>` : ''}
+        ${p.warnings.length ? '<span class="badge b-warn">需注意</span>' : ''}
+        <div class="sub">${esc(p.dept)}・${p.assignedSlot ? '<span class="badge b-slot" style="margin:0">' + esc(slotShort(p.assignedSlot)) + '</span>' : '最希望：' + esc(p.preferred || '—')}</div>
+      </button>`).join('') || '<div class="muted" style="padding:12px">沒有符合的受試者</div>';
+    document.querySelectorAll('.item').forEach(b => b.onclick = () => {
+      if (ttDraft && !confirm('放棄尚未儲存的時段表變更？')) return;
+      select(Number(b.dataset.row));
+    });
+  }
+
+  function backToList() {
+    current = null;
+    ttDraft = null;
+    view = 'summary';
+    document.getElementById('app').classList.remove('detail');
+    renderList();
+    renderSummary();
+  }
+
+  function openMain() { document.getElementById('app').classList.add('detail'); }
+  function bindBack() { document.getElementById('back').onclick = backToList; }
+  const BACK = '<div class="top"><button class="btn sm back-list" id="back">← 受試者列表</button></div>';
+
+  /** 時段總覽：各日期的可配合 / 最希望 / 已排時段 */
+  function renderSummary(openOnMobile) {
+    view = 'summary';
+    const stats = {};
+    const ensure = k => stats[k] = stats[k] || { avail: 0, pref: 0, booked: 0, confirmed: 0, total: 0 };
+    DATA.timetable.forEach(s => { const st = ensure(dateKey(s.date)); st.total++; if (s.row) st.booked++; if (s.row && s.confirmed) st.confirmed++; });
+    DATA.participants.forEach(p => {
+      p.availableDates.forEach(d => ensure(dateKey(d)).avail++);
+      if (p.preferredKey) ensure(p.preferredKey).pref++;
+    });
+    const rows = Object.keys(stats).sort().map(k => {
+      const s = stats[k];
+      return `<tr><td>${k}</td><td class="num">${s.avail}</td><td class="num">${s.pref}</td><td class="num">${s.booked} / ${s.total}</td><td class="num">${s.confirmed}</td></tr>`;
+    }).join('');
+    const noSlot = DATA.participants.filter(p => !p.compatibleSlots.length).map(p => esc(p.name)).join('、');
+    const unbooked = DATA.participants.filter(p => !p.assignedSlot).length;
+    document.getElementById('main').innerHTML = `${BACK}
+      <h2>時段總覽</h2>
+      <p class="muted">點選受試者查看完整資料並安排時段、寄出邀請信。尚未安排：${unbooked} 人。</p>
+      <table class="summary">
+        <tr><th>日期</th><th>可配合</th><th>最希望</th><th>已排 / 時段數</th><th>已確認</th></tr>${rows}
+      </table>
+      ${noSlot ? `<div class="warn">沒有符合可配合時間的時段：${noSlot}</div>` : ''}`;
+    bindBack();
+    if (openOnMobile) openMain();
+  }
+
+  // ── 時段表 ──
+  function renderTimetable(openOnMobile) {
+    view = 'timetable';
+    current = null;
+    renderList();
+    const editing = !!ttDraft;
+    const stateOf = s => editing ? ttDraft[s.id] : { row: s.row, confirmed: s.confirmed };
+    const changed = editing ? DATA.timetable.filter(s => ttDraft[s.id].row !== s.row || ttDraft[s.id].confirmed !== s.confirmed).length : 0;
+    const people = DATA.participants.slice().sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+
+    const byDate = {};
+    DATA.timetable.forEach(s => (byDate[s.date] = byDate[s.date] || []).push(s));
+
+    const sections = Object.keys(byDate).map(date => {
+      const slots = byDate[date];
+      const booked = slots.filter(s => stateOf(s).row).length;
+      const confirmedCount = slots.filter(s => stateOf(s).row && stateOf(s).confirmed).length;
+      const rows = slots.map(s => {
+        const { row, confirmed } = stateOf(s);
+        const p = row ? personByRow(row) : null;
+        const name = p ? p.name : (row ? s.name : '');
+        const email = p ? p.email : (row ? s.email : '');
+        let who, check;
+        if (editing) {
+          const opts = people.map(q => {
+            const at = DATA.timetable.find(t => t.id !== s.id && ttDraft[t.id].row === q.row);
+            return `<option value="${q.row}" ${q.row === row ? 'selected' : ''}>${esc(q.name)}${at ? '（目前在 ' + esc(slotShort(at.id)) + '）' : ''}</option>`;
+          }).join('');
+          who = `<select data-slot="${esc(s.id)}"><option value="">（空）</option>${opts}</select>`;
+          check = `<input type="checkbox" class="confirm" data-slot="${esc(s.id)}" ${confirmed ? 'checked' : ''} ${row ? '' : 'disabled'} style="width:20px;height:20px">`;
+        } else {
+          who = row ? `<a href="#" data-row="${row}">${esc(name)}</a>` : '—';
+          check = !row ? '' : confirmed ? '<span class="badge b-done" style="margin:0">✔ 已確認</span>' : '<span class="muted">未確認</span>';
+        }
+        const edited = editing && (row !== s.row || confirmed !== s.confirmed);
+        return `<tr class="${row ? '' : 'free'} ${edited ? 'changed' : ''}">
+          <td class="time">${esc(s.time)}</td><td>${who}</td><td class="email">${esc(email)}</td><td class="check">${check}</td></tr>`;
+      }).join('');
+      return `<div class="date-head"><h3>${esc(date)}</h3><span class="muted">已排 ${booked} / ${slots.length}・已確認 ${confirmedCount}</span></div>
+        <table class="tt"><tr><th>時間</th><th>受試者</th><th>Email</th><th>確認</th></tr>${rows}</table>`;
+    }).join('');
+
+    const bar = editing
+      ? `<div class="editbar actions">
+           <strong>編輯中</strong><span class="msg">已變更 ${changed} 個時段（不會寄信）</span>
+           <span style="flex:1"></span>
+           <button class="btn" id="ttCancel">取消</button>
+           <button class="btn primary" id="ttSave" ${changed ? '' : 'disabled'}>儲存</button>
+         </div>`
+      : `<div class="actions" style="margin-bottom:8px"><button class="btn" id="ttEdit">編輯時段表</button>
+           <span class="msg">每場 ${DATA.config.SLOT_MINUTES} 分鐘${DATA.config.BUFFER_MINUTES ? '，間隔 ' + DATA.config.BUFFER_MINUTES + ' 分鐘緩衝' : ''}・受試者回覆 OK 後，在編輯模式勾選「確認」</span></div>`;
+
+    const main = document.getElementById('main');
+    main.innerHTML = `${BACK}<h2>時段表</h2>${bar}${sections}`;
+    bindBack();
+    if (openOnMobile) { openMain(); main.scrollTop = 0; }
+
+    const rerender = () => { const top = main.scrollTop; renderTimetable(); main.scrollTop = top; };
+    if (editing) {
+      main.querySelectorAll('select[data-slot]').forEach(sel => sel.onchange = () => {
+        const row = sel.value ? Number(sel.value) : null;
+        // 選到已在其他時段的人 = 移動：清空原本的時段；換了人或換了時段都需重新確認
+        if (row) Object.keys(ttDraft).forEach(id => { if (ttDraft[id].row === row) ttDraft[id] = { row: null, confirmed: false }; });
+        ttDraft[sel.dataset.slot] = { row, confirmed: false };
+        rerender();
+      });
+      main.querySelectorAll('input.confirm').forEach(cb => cb.onchange = () => {
+        ttDraft[cb.dataset.slot].confirmed = cb.checked;
+        rerender();
+      });
+      document.getElementById('ttCancel').onclick = () => { ttDraft = null; renderTimetable(); };
+      document.getElementById('ttSave').onclick = e => {
+        if (!confirm(`確定儲存 ${changed} 個時段的變更嗎？\n此動作不會寄信通知受試者。`)) return;
+        e.target.disabled = true;
+        const assignments = DATA.timetable.map(s => ({ id: s.id, row: ttDraft[s.id].row || null, confirmed: !!ttDraft[s.id].confirmed }));
+        call('saveTimetable', [assignments], n => {
+          ttDraft = null;
+          alert(`已儲存 ${n} 個變更。\n被移動且已寄過信的受試者會標示「需注意」，記得寄更改通知。`);
+          load();
+        }, err => { e.target.disabled = false; alert('儲存失敗：' + err.message); });
+      };
+    } else {
+      document.getElementById('ttEdit').onclick = () => {
+        if (!confirm('確認要編輯時段表嗎？')) return;
+        ttDraft = {};
+        DATA.timetable.forEach(s => ttDraft[s.id] = { row: s.row, confirmed: s.confirmed });
+        renderTimetable();
+      };
+      main.querySelectorAll('a[data-row]').forEach(a => a.onclick = e => { e.preventDefault(); select(Number(a.dataset.row)); });
+    }
+  }
+
+  // ── 受試者詳細頁與邀請信 ──
+  function buildLetter(p, slot) {
+    const c = DATA.config;
+    return [
+      `${p.name} 您好：`,
+      '',
+      '感謝您填寫「羽球揮拍動作分析研究」受試者招募表單！',
+      p.status ? '您的測驗時間已更新如下，造成不便敬請見諒：' : '依據您填寫的可配合時段，誠摯邀請您於以下時間參與測驗：',
+      '',
+      `・測驗時間：${slot || '（請選擇時段）'}`,
+      `・測驗地點：${c.LOCATION}`,
+      `・預計所需時間：${c.DURATION}`,
+      '',
+      '測驗內容：',
+      '1. 配戴 Garmin 智慧手錶，進行指定的羽球揮拍動作，收集六軸動作資料。',
+      '2. 測驗過程將同步錄影，影片將提供給真人羽球教練進行動作評分。',
+      '3. 所有資料皆以去識別化方式處理，僅用於本專題研究與分析。',
+      '',
+      '注意事項：',
+      ...c.NOTES.map(n => '・' + n),
+      '',
+      '煩請回覆此信確認是否可以出席；若時間無法配合，也歡迎直接回信告知，我們會再協助安排其他時段。',
+      '',
+      '再次感謝您的協助！',
+      '',
+      ...c.SIGNATURE,
+    ].join('\n');
+  }
+
+  function slotOptions(p) {
+    const free = DATA.timetable.filter(s => !s.row || s.row === p.row);
+    const compat = free.filter(s => p.compatibleSlots.includes(s.id));
+    const other = free.filter(s => !p.compatibleSlots.includes(s.id));
+    const def = p.assignedSlot
+      || (compat.find(s => dateKey(s.date) === p.preferredKey) || compat[0] || {}).id
+      || '';
+    const opt = s => `<option value="${esc(s.id)}" ${s.id === def ? 'selected' : ''}>${esc(s.id)}${s.row === p.row ? '（目前安排）' : ''}</option>`;
+    let html = def ? '' : '<option value="" selected>請選擇時段</option>';
+    if (compat.length) html += `<optgroup label="符合受試者可配合時間">${compat.map(opt).join('')}</optgroup>`;
+    if (other.length) html += `<optgroup label="其他空的時段">${other.map(opt).join('')}</optgroup>`;
+    return { html, empty: !free.length };
+  }
+
+  function select(row) {
+    current = DATA.participants.find(p => p.row === row);
+    ttDraft = null;
+    renderList();
+    if (!current) { backToList(); return; }
+    view = 'person';
+    openMain();
+    const p = current;
+    const fields = DATA.headers.map((h, i) => h ? `<tr><th title="${esc(h)}">${esc(shortHeader(h))}</th><td>${esc(p.values[i]).replace(/, /g, '<br>')}</td></tr>` : '').join('');
+    const slots = slotOptions(p);
+    const subject = (p.status ? '【時間更新】' : '') + DATA.config.SUBJECT + ' — ' + p.name;
+    const main = document.getElementById('main');
+    main.innerHTML = `${BACK}
+      <h2>${esc(p.name)} <span class="muted" style="font-size:14px;font-weight:normal">${esc(p.dept)}・第 ${p.row} 列</span></h2>
+      ${p.assignedSlot ? `<div>目前安排：<span class="badge b-slot" style="margin:0">${esc(p.assignedSlot)}</span> ${p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : '<span class="muted">（受試者尚未確認）</span>'}</div>` : ''}
+      ${p.status ? `<div class="status">✔ ${esc(p.status)}</div>` : ''}
+      ${p.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join('')}
+
+      <h3>受試者回覆</h3>
+      <button class="btn" id="repliesBtn">查看回覆信</button>
+      <div id="replies"></div>
+
+      <h3>所有欄位</h3>
+      <table>${fields}</table>
+
+      <h3>安排時段與邀請信</h3>
+      <label class="f">測驗時段（已排給其他人的時段不會出現）</label>
+      <select id="slot">${slots.html}</select>
+      ${slots.empty ? '<div class="warn">時段表已全部排滿</div>' : ''}
+      <label class="f">收件人（固定為表單填寫的 Email）</label>
+      <div class="readonly">${esc(p.email || '（未填）')}</div>
+      <label class="f">主旨</label>
+      <input type="text" id="subject" value="${esc(subject)}">
+      <label class="f">內容（可直接修改）</label>
+      <textarea id="body"></textarea>
+      <div class="actions">
+        <button class="btn primary" id="send" ${p.email ? '' : 'disabled'}>寄出邀請信</button>
+        <button class="btn" id="draft" ${p.email ? '' : 'disabled'}>建立 Gmail 草稿</button>
+        <button class="btn" id="assign">只排時段不寄信</button>
+        <button class="btn" id="copy">複製內容</button>
+        <span class="msg" id="msg"></span>
+      </div>`;
+    main.scrollTop = 0;
+    bindBack();
+    updateReplyButton();
+    document.getElementById('repliesBtn').onclick = () => showReplies(p);
+
+    const slotSel = document.getElementById('slot');
+    const body = document.getElementById('body');
+    const refresh = () => { body.value = buildLetter(p, slotSel.value); };
+    slotSel.onchange = refresh;
+    refresh();
+
+    const msg = t => document.getElementById('msg').textContent = t;
+    const buttons = ['send', 'draft', 'assign'].map(id => document.getElementById(id));
+
+    function submit(mode, question) {
+      const slot = slotSel.value;
+      if (!slot) { msg('請先選擇時段'); return; }
+      if (!confirm(question.replace('{slot}', slot))) return;
+      buttons.forEach(b => b.disabled = true);
+      msg('處理中…');
+      call('sendInvite', [p.row, slot, document.getElementById('subject').value, body.value, mode], () => {
+        load();
+        setTimeout(() => { const m = document.getElementById('msg'); if (m) m.textContent = '完成'; }, 0);
+      }, err => { buttons.forEach(b => b.disabled = false); msg('失敗：' + err.message); });
+    }
+
+    document.getElementById('send').onclick = () =>
+      submit('send', `確定要寄出邀請信給 ${p.email} 嗎？\n時段：{slot}` + (p.status ? '\n\n（此受試者已通知過：' + p.status + '）' : ''));
+    document.getElementById('draft').onclick = () =>
+      submit('draft', '建立 Gmail 草稿，並把此受試者排入時段：\n{slot}\n\n確定嗎？');
+    document.getElementById('assign').onclick = () =>
+      submit('assign', '只把此受試者排入時段（不寄信）：\n{slot}\n\n確定嗎？');
+    document.getElementById('copy').onclick = () => {
+      const text = '主旨：' + document.getElementById('subject').value + '\n\n' + body.value;
+      const done = () => msg('已複製');
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+      else fallbackCopy(text, done);
+    };
+  }
+
+  function showReplies(p) {
+    const btn = document.getElementById('repliesBtn');
+    const box = document.getElementById('replies');
+    btn.disabled = true;
+    btn.textContent = '讀取 Gmail 中…';
+    call('getReplies', [p.row], list => {
+      if (!document.getElementById('replies') || !current || current.row !== p.row) return;
+      btn.disabled = false;
+      btn.dataset.loaded = '1';
+      btn.textContent = `重新讀取（共 ${list.length} 封）`;
+      REPLY_COUNTS[p.row] = list.length;
+      box.innerHTML = list.length ? list.map((m, i) => `
+        <div class="reply">
+          <div class="meta"><strong>#${i + 1}</strong><span>${esc(m.date)}</span><span>${esc(m.subject)}</span>
+            <a href="${esc(m.link)}" target="_blank" rel="noopener">在 Gmail 開啟</a></div>
+          <div class="body">${esc(m.body) || '<span class="muted">（沒有文字內容）</span>'}</div>
+        </div>`).join('')
+        : '<p class="muted">還沒有收到這位受試者的回覆。</p>';
+    }, err => { btn.disabled = false; btn.textContent = '查看回覆信'; box.innerHTML = `<div class="warn">讀取失敗：${esc(err.message)}</div>`; });
+  }
+
+  function fallbackCopy(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove(); done();
+  }
+
+  document.getElementById('search').oninput = renderList;
+  document.getElementById('hideDone').onchange = renderList;
+  document.getElementById('reload').onclick = load;
+  document.getElementById('summaryBtn').onclick = () => { current = null; ttDraft = null; renderList(); renderSummary(true); };
+  document.getElementById('ttBtn').onclick = () => {
+    if (ttDraft && !confirm('放棄尚未儲存的時段表變更？')) return;
+    ttDraft = null;
+    renderTimetable(true);
+  };
+
+  TOKEN = loadToken();
+  TOKEN ? showApp() : showLogin();
+</script>
+</body>
+</html>

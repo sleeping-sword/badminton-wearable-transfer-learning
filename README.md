@@ -12,3 +12,5 @@ watch_app/
 mobile_app/
   android/
     GarminReceiver/     Android 手機端接收資料程式
+
+recruitment_tool/       受試者招募表單面板與邀請信（Google Apps Script）
