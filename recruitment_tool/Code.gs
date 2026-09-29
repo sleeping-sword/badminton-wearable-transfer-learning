@@ -8,6 +8,7 @@
  *   - 選時段後寄出邀請信 / 建立草稿，time table 自動填入受試者，已排的時段不會再出現在選單
  *   - 時段表可進入編輯模式手動移動受試者、勾選受試者已回覆確認
  *   - 讀取 Gmail 中受試者對邀請信的回覆（只看主旨含 REPLY_SUBJECT_KEYWORD 的信）
+ *   - 報名人數上限：回覆數達上限時自動關閉表單
  *
  * 帳密不寫在程式碼中：由試算表選單「受試者工具 → 設定登入帳密」設定，
  * 以加鹽 SHA-256 存在 Script Properties。
@@ -49,6 +50,8 @@ const CONFIG = {
   REPLY_SUBJECT_KEYWORD: '羽球揮拍動作分析研究',
   REPLY_SEARCH_DAYS: 90,
 
+  FORM_CLOSED_MESSAGE: '報名人數已額滿，感謝您的關注！',
+
   SESSION_SECONDS: 6 * 60 * 60, // 登入有效時間（CacheService 上限 6 小時）
   MAX_FAILED_LOGINS: 10,        // 連續失敗次數達上限即暫停登入
   LOCKOUT_SECONDS: 15 * 60,
@@ -81,6 +84,7 @@ function onOpen() {
     .createMenu('受試者工具')
     .addItem('開啟受試者面板', 'showDialog')
     .addItem('設定登入帳密', 'setupCredentials')
+    .addItem('設定報名人數上限', 'setupResponseLimit')
     .addToUi();
 }
 
@@ -153,6 +157,66 @@ function requireSession_(token) {
   if (!token || !CacheService.getScriptCache().get('session_' + token)) {
     throw new Error('SESSION_EXPIRED');
   }
+}
+
+// ───────────────────────── 報名人數上限 ─────────────────────────
+
+/** 試算表選單：設定報名人數上限，並建立「提交表單時」觸發條件 */
+function setupResponseLimit() {
+  const ui = SpreadsheetApp.getUi();
+  const form = getForm_();
+  if (!form) { ui.alert('這份試算表沒有連結 Google 表單'); return; }
+
+  const props = PropertiesService.getScriptProperties();
+  const count = countResponses_();
+  const current = Number(props.getProperty('MAX_RESPONSES') || 0);
+  const res = ui.prompt('設定報名人數上限',
+    '目前回覆數：' + count + '\n目前上限：' + (current || '未設定') + '\n\n請輸入上限人數（輸入 0 取消限制）：',
+    ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  const max = parseInt(res.getResponseText(), 10);
+  if (!(max >= 0)) { ui.alert('請輸入數字'); return; }
+  props.setProperty('MAX_RESPONSES', String(max));
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hasTrigger = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'enforceResponseLimit';
+  });
+  if (!hasTrigger) ScriptApp.newTrigger('enforceResponseLimit').forSpreadsheet(ss).onFormSubmit().create();
+
+  if (max && count >= max) {
+    closeForm_(form);
+    ui.alert('目前已有 ' + count + ' 份回覆，已達上限，表單已關閉。');
+  } else if (!form.isAcceptingResponses()) {
+    const reopen = ui.alert('已設定上限 ' + (max || '（無）') + '。表單目前是關閉的，要重新開放報名嗎？', ui.ButtonSet.YES_NO);
+    if (reopen === ui.Button.YES) form.setAcceptingResponses(true);
+  } else {
+    ui.alert(max ? '已設定上限 ' + max + ' 人，目前 ' + count + ' 人，還剩 ' + (max - count) + ' 個名額。' : '已取消報名人數限制。');
+  }
+}
+
+/** 觸發條件：每次有人提交表單時檢查，達上限就關閉表單（重複呼叫也無副作用） */
+function enforceResponseLimit() {
+  const max = Number(PropertiesService.getScriptProperties().getProperty('MAX_RESPONSES') || 0);
+  if (!max || countResponses_() < max) return;
+  const form = getForm_();
+  if (form && form.isAcceptingResponses()) closeForm_(form);
+}
+
+function closeForm_(form) {
+  form.setCustomClosedFormMessage(CONFIG.FORM_CLOSED_MESSAGE);
+  form.setAcceptingResponses(false);
+}
+
+function getForm_() {
+  const url = getSpreadsheet_().getFormUrl();
+  return url ? FormApp.openByUrl(url) : null;
+}
+
+/** 回覆試算表中有資料的列數（刪掉重複回覆的列後，名額會釋出） */
+function countResponses_() {
+  const values = getSheet_().getDataRange().getDisplayValues();
+  return values.slice(1).filter(function (r) { return String(r[0]).trim(); }).length;
 }
 
 // ───────────────────────── 試算表存取 ─────────────────────────
