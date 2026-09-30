@@ -9,6 +9,7 @@
  *   - 時段表可進入編輯模式手動移動受試者、勾選受試者已回覆確認
  *   - 讀取 Gmail 中受試者對邀請信的回覆（只看主旨含 REPLY_SUBJECT_KEYWORD 的信）
  *   - 報名人數上限：回覆數達上限時自動關閉表單
+ *   - 標記受試者退出：釋出時段、從名單與統計中隱藏（資料保留，可恢復）
  *
  * 帳密不寫在程式碼中：由試算表選單「受試者工具 → 設定登入帳密」設定，
  * 以加鹽 SHA-256 存在 Script Properties。
@@ -17,6 +18,7 @@
 const CONFIG = {
   SHEET_NAME: '表單回覆 1',
   STATUS_HEADER: '邀請信狀態',
+  WITHDRAWN_HEADER: '退出',
   TIMETABLE_SHEET: 'time table',
 
   // 測驗場次：每場 SLOT_MINUTES 分鐘，場與場之間留 BUFFER_MINUTES 分鐘
@@ -213,10 +215,13 @@ function getForm_() {
   return url ? FormApp.openByUrl(url) : null;
 }
 
-/** 回覆試算表中有資料的列數（刪掉重複回覆的列後，名額會釋出） */
+/** 回覆試算表中有資料且未退出的列數（刪掉重複回覆的列或標記退出後，名額會釋出） */
 function countResponses_() {
   const values = getSheet_().getDataRange().getDisplayValues();
-  return values.slice(1).filter(function (r) { return String(r[0]).trim(); }).length;
+  const wCol = (values[0] || []).indexOf(CONFIG.WITHDRAWN_HEADER);
+  return values.slice(1).filter(function (r) {
+    return String(r[0]).trim() && !(wCol >= 0 && String(r[wCol]).trim());
+  }).length;
 }
 
 // ───────────────────────── 試算表存取 ─────────────────────────
@@ -305,13 +310,13 @@ function isConfirmed_(v) {
   return !!v && !/^(false|0|否|no)$/i.test(v);
 }
 
-/** 取得（必要時建立）邀請信狀態欄，回傳 1-based 欄號 */
-function getStatusColumn_(sheet) {
+/** 取得（必要時建立）指定表頭的欄位（邀請信狀態、退出），回傳 1-based 欄號 */
+function getHeaderColumn_(sheet, header) {
   const lastCol = sheet.getLastColumn();
   const headers = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
-  const idx = headers.indexOf(CONFIG.STATUS_HEADER);
+  const idx = headers.indexOf(header);
   if (idx >= 0) return idx + 1;
-  sheet.getRange(1, lastCol + 1).setValue(CONFIG.STATUS_HEADER);
+  sheet.getRange(1, lastCol + 1).setValue(header);
   return lastCol + 1;
 }
 
@@ -326,7 +331,8 @@ function getResponse_(row) {
     const c = headers.findIndex(function (h) { return h.indexOf(FIELD_KEYWORDS[key]) >= 0; });
     return c >= 0 ? String(values[c]).trim() : '';
   };
-  return { row: row, name: pick('name'), email: pick('email') };
+  const wCol = headers.indexOf(CONFIG.WITHDRAWN_HEADER);
+  return { row: row, name: pick('name'), email: pick('email'), withdrawn: wCol >= 0 && !!String(values[wCol]).trim() };
 }
 
 function now_() {
@@ -360,6 +366,7 @@ function buildData_(values, ttValues) {
     col[key] = headers.findIndex(function (h) { return h.indexOf(FIELD_KEYWORDS[key]) >= 0; });
   });
   col.status = headers.indexOf(CONFIG.STATUS_HEADER);
+  col.withdrawn = headers.indexOf(CONFIG.WITHDRAWN_HEADER);
 
   const get = function (row, key) { return col[key] >= 0 ? String(row[col[key]] || '').trim() : ''; };
   const timetable = parseTimetable_(ttValues);
@@ -373,6 +380,7 @@ function buildData_(values, ttValues) {
     const saturday = get(row, 'saturday');
     const preferred = get(row, 'preferred');
     const status = get(row, 'status');
+    const withdrawn = get(row, 'withdrawn');
     const warnings = [];
 
     const availableDates = splitMulti_(dates).filter(function (d) { return dateKey_(d); });
@@ -387,7 +395,7 @@ function buildData_(values, ttValues) {
     const compatibleSlots = timetable.filter(function (s) {
       return isCompatible_(s, dateKeys, saturday);
     }).map(function (s) { return s.id; });
-    if (!compatibleSlots.length) warnings.push('時段表中沒有符合此受試者可配合時間的時段');
+    if (!compatibleSlots.length && !withdrawn) warnings.push('時段表中沒有符合此受試者可配合時間的時段');
 
     const email = get(row, 'email');
     const studentId = get(row, 'studentId');
@@ -402,7 +410,9 @@ function buildData_(values, ttValues) {
     }
     const assignedSlot = assigned.length ? assigned[0].id : '';
     const statusSlot = status.split('｜')[1] || '';
-    if (status && statusSlot !== assignedSlot) {
+    if (withdrawn && assignedSlot) {
+      warnings.push('已標記退出，但仍排在時段表「' + assignedSlot + '」，請編輯時段表移除');
+    } else if (status && statusSlot !== assignedSlot && !withdrawn) {
       warnings.push(assignedSlot
         ? '時段表已改為「' + assignedSlot + '」，但上次通知的時段是「' + statusSlot + '」，記得寄更改通知'
         : '已通知時段「' + statusSlot + '」，但目前沒有排在時段表中');
@@ -422,6 +432,7 @@ function buildData_(values, ttValues) {
       assignedSlot: assignedSlot,
       confirmed: assigned.length ? assigned[0].confirmed : false,
       status: status,
+      withdrawn: withdrawn,
       warnings: warnings,
     });
   }
@@ -604,6 +615,7 @@ function sendInvite(token, row, slotId, subject, body, mode) {
 
   return withLock_(function () {
     const person = getResponse_(row);
+    if (person.withdrawn) throw new Error('此受試者已標記退出，請先恢復');
     if (mode !== 'assign' && !person.email) throw new Error('此受試者沒有 Email');
 
     const ttSheet = getTimetableSheet_();
@@ -629,7 +641,7 @@ function sendInvite(token, row, slotId, subject, body, mode) {
       .setValues([[person.name, person.email, person.row, stamp, keepConfirmed ? CONFIRMED_MARK : '']]);
 
     const sheet = getSheet_();
-    sheet.getRange(person.row, getStatusColumn_(sheet)).setValue(MODE_LABELS[mode] + ' ' + stamp + '｜' + slotId);
+    sheet.getRange(person.row, getHeaderColumn_(sheet, CONFIG.STATUS_HEADER)).setValue(MODE_LABELS[mode] + ' ' + stamp + '｜' + slotId);
     return true;
   });
 }
@@ -670,10 +682,40 @@ function saveTimetable(token, assignments) {
       let values = EMPTY_ASSIGNMENT;
       if (c.row) {
         const p = getResponse_(c.row);
+        if (p.withdrawn) throw new Error(p.name + ' 已標記退出，不能排入時段');
         values = [p.name, p.email, p.row, stamp, c.confirmed ? CONFIRMED_MARK : ''];
       }
       ttSheet.getRange(c.slot.sheetRow, 3, 1, EMPTY_ASSIGNMENT.length).setValues([values]);
     });
     return changes.length;
+  });
+}
+
+// ───────────────────────── 退出 ─────────────────────────
+
+/**
+ * 前端呼叫：標記受試者退出（或恢復）。
+ * 退出時會清空其在時段表的時段，並在「退出」欄記下時間與原因；表單回覆本身不刪除（列號不會跑掉），不會寄信。
+ * 回傳被釋出的時段。
+ */
+function setWithdrawn(token, row, withdrawn, reason) {
+  requireSession_(token);
+  return withLock_(function () {
+    const person = getResponse_(row);
+    const freed = [];
+    if (withdrawn) {
+      const ttSheet = getTimetableSheet_();
+      parseTimetable_(ttSheet.getDataRange().getDisplayValues()).forEach(function (s) {
+        if (s.row === person.row) {
+          ttSheet.getRange(s.sheetRow, 3, 1, EMPTY_ASSIGNMENT.length).setValues([EMPTY_ASSIGNMENT]);
+          freed.push(s.id);
+        }
+      });
+    }
+    const sheet = getSheet_();
+    reason = String(reason || '').trim();
+    sheet.getRange(person.row, getHeaderColumn_(sheet, CONFIG.WITHDRAWN_HEADER))
+      .setValue(withdrawn ? '已退出 ' + now_() + (reason ? '｜' + reason : '') : '');
+    return freed;
   });
 }

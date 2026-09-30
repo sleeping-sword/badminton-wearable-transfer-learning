@@ -59,6 +59,10 @@
   .back-list { display: none; }
   .b-slot { background: #ddf4ff; color: #0969da; }
   .b-reply { background: #fbefff; color: #8250df; }
+  .b-out { background: #eaeef2; color: #57606a; }
+  .item.out .name { color: #8c959f; text-decoration: line-through; }
+  .danger { color: #cf222e; border-color: #cf222e; }
+  .withdrawn { background: #eaeef2; border: 1px solid #afb8c1; padding: 8px 10px; border-radius: 6px; margin: 6px 0; }
   .reply { border: 1px solid #d0d7de; border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
   .reply .meta { font-size: 13px; color: #57606a; display: flex; gap: 8px; flex-wrap: wrap; }
   .reply .body { white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
@@ -103,6 +107,7 @@
       <input id="search" type="text" placeholder="搜尋姓名、系級、學號、Email…">
       <div class="row">
         <label><input type="checkbox" id="hideDone"> 隱藏已通知</label>
+        <label><input type="checkbox" id="showOut"> 顯示已退出</label>
         <span id="count"></span>
         <span style="flex:1"></span>
         <button class="btn sm" id="summaryBtn">時段總覽</button>
@@ -211,23 +216,29 @@
 
   function slotShort(id) { return String(id || '').replace(/^\d{4}\//, ''); }
   function personByRow(row) { return DATA.participants.find(p => p.row === row); }
+  /** 未退出的受試者（統計、時段表選單都只算這些人） */
+  function activePeople() { return DATA.participants.filter(p => !p.withdrawn); }
 
   function renderList() {
     const q = document.getElementById('search').value.trim().toLowerCase();
     const hideDone = document.getElementById('hideDone').checked;
+    const showOut = document.getElementById('showOut').checked;
     const items = DATA.participants.filter(p => {
+      if (p.withdrawn && !showOut) return false;
       if (hideDone && p.status) return false;
       if (!q) return true;
       return [p.name, p.dept, p.studentId, p.email, p.preferred].join(' ').toLowerCase().includes(q);
     });
-    const done = DATA.participants.filter(p => p.status).length;
+    const active = activePeople();
+    const out = DATA.participants.length - active.length;
+    const done = active.filter(p => p.status).length;
     const booked = DATA.timetable.filter(s => s.row).length;
     const confirmed = DATA.timetable.filter(s => s.row && s.confirmed).length;
-    document.getElementById('count').textContent = `共 ${DATA.participants.length} 人・已通知 ${done}・已確認 ${confirmed}・時段 ${booked}/${DATA.timetable.length}`;
+    document.getElementById('count').textContent = `共 ${active.length} 人・已通知 ${done}・已確認 ${confirmed}・時段 ${booked}/${DATA.timetable.length}` + (out ? `・已退出 ${out}` : '');
     document.getElementById('list').innerHTML = items.map(p => `
-      <button class="item ${current && current.row === p.row ? 'active' : ''}" data-row="${p.row}">
+      <button class="item ${current && current.row === p.row ? 'active' : ''} ${p.withdrawn ? 'out' : ''}" data-row="${p.row}">
         <span class="name">${esc(p.name || '(未填姓名)')}</span>
-        ${p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : p.status ? '<span class="badge b-slot">已通知</span>' : ''}
+        ${p.withdrawn ? '<span class="badge b-out">已退出</span>' : p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : p.status ? '<span class="badge b-slot">已通知</span>' : ''}
         ${REPLY_COUNTS[p.row] ? `<span class="badge b-reply">💬 ${REPLY_COUNTS[p.row]}</span>` : ''}
         ${p.warnings.length ? '<span class="badge b-warn">需注意</span>' : ''}
         <div class="sub">${esc(p.dept)}・${p.assignedSlot ? '<span class="badge b-slot" style="margin:0">' + esc(slotShort(p.assignedSlot)) + '</span>' : '最希望：' + esc(p.preferred || '—')}</div>
@@ -257,7 +268,7 @@
     const stats = {};
     const ensure = k => stats[k] = stats[k] || { avail: 0, pref: 0, booked: 0, confirmed: 0, total: 0 };
     DATA.timetable.forEach(s => { const st = ensure(dateKey(s.date)); st.total++; if (s.row) st.booked++; if (s.row && s.confirmed) st.confirmed++; });
-    DATA.participants.forEach(p => {
+    activePeople().forEach(p => {
       p.availableDates.forEach(d => ensure(dateKey(d)).avail++);
       if (p.preferredKey) ensure(p.preferredKey).pref++;
     });
@@ -265,8 +276,8 @@
       const s = stats[k];
       return `<tr><td>${k}</td><td class="num">${s.avail}</td><td class="num">${s.pref}</td><td class="num">${s.booked} / ${s.total}</td><td class="num">${s.confirmed}</td></tr>`;
     }).join('');
-    const noSlot = DATA.participants.filter(p => !p.compatibleSlots.length).map(p => esc(p.name)).join('、');
-    const unbooked = DATA.participants.filter(p => !p.assignedSlot).length;
+    const noSlot = activePeople().filter(p => !p.compatibleSlots.length).map(p => esc(p.name)).join('、');
+    const unbooked = activePeople().filter(p => !p.assignedSlot).length;
     document.getElementById('main').innerHTML = `${BACK}
       <h2>時段總覽</h2>
       <p class="muted">點選受試者查看完整資料並安排時段、寄出邀請信。尚未安排：${unbooked} 人。</p>
@@ -286,7 +297,8 @@
     const editing = !!ttDraft;
     const stateOf = s => editing ? ttDraft[s.id] : { row: s.row, confirmed: s.confirmed };
     const changed = editing ? DATA.timetable.filter(s => ttDraft[s.id].row !== s.row || ttDraft[s.id].confirmed !== s.confirmed).length : 0;
-    const people = DATA.participants.slice().sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    // 已退出的人不列入選單（若仍排在時段表中則保留，才能手動移除）
+    const people = DATA.participants.filter(p => !p.withdrawn || DATA.timetable.some(s => s.row === p.row)).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
 
     const byDate = {};
     DATA.timetable.forEach(s => (byDate[s.date] = byDate[s.date] || []).push(s));
@@ -428,7 +440,13 @@
     main.innerHTML = `${BACK}
       <h2>${esc(p.name)} <span class="muted" style="font-size:14px;font-weight:normal">${esc(p.dept)}・第 ${p.row} 列</span></h2>
       ${p.assignedSlot ? `<div>目前安排：<span class="badge b-slot" style="margin:0">${esc(p.assignedSlot)}</span> ${p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : '<span class="muted">（受試者尚未確認）</span>'}</div>` : ''}
+      ${p.withdrawn ? `<div class="withdrawn">🚫 ${esc(p.withdrawn)}</div>` : ''}
       ${p.status ? `<div class="status">✔ ${esc(p.status)}</div>` : ''}
+      <div class="actions" style="margin-top:6px">
+        ${p.withdrawn
+          ? '<button class="btn" id="restoreBtn">恢復為受試者</button>'
+          : '<button class="btn danger" id="withdrawBtn">標記為退出（無法參加）</button>'}
+      </div>
       ${p.warnings.map(w => `<div class="warn">⚠ ${esc(w)}</div>`).join('')}
 
       <h3>受試者回覆</h3>
@@ -438,6 +456,7 @@
       <h3>所有欄位</h3>
       <table>${fields}</table>
 
+      <div id="inviteSection" ${p.withdrawn ? 'style="display:none"' : ''}>
       <h3>安排時段與邀請信</h3>
       <label class="f">測驗時段（已排給其他人的時段不會出現）</label>
       <select id="slot">${slots.html}</select>
@@ -454,11 +473,14 @@
         <button class="btn" id="assign">只排時段不寄信</button>
         <button class="btn" id="copy">複製內容</button>
         <span class="msg" id="msg"></span>
+      </div>
       </div>`;
     main.scrollTop = 0;
     bindBack();
     updateReplyButton();
     document.getElementById('repliesBtn').onclick = () => showReplies(p);
+    const wBtn = document.getElementById('withdrawBtn') || document.getElementById('restoreBtn');
+    wBtn.onclick = () => setWithdrawn(p, !p.withdrawn, wBtn);
 
     const slotSel = document.getElementById('slot');
     const body = document.getElementById('body');
@@ -495,6 +517,25 @@
     };
   }
 
+  /** 標記退出 / 恢復：退出會釋出時段，不會寄信，表單回覆資料保留 */
+  function setWithdrawn(p, withdrawn, btn) {
+    let reason = '';
+    if (withdrawn) {
+      const q = `將 ${p.name} 標記為退出？\n` +
+        (p.assignedSlot ? `・會釋出時段「${p.assignedSlot}」\n` : '') +
+        '・從名單與統計中隱藏（勾「顯示已退出」可再看到）\n・不會寄信，表單回覆資料保留\n\n可填寫原因（選填）：';
+      reason = prompt(q, '');
+      if (reason === null) return;
+    } else if (!confirm(`將 ${p.name} 恢復為受試者？\n（原本的時段已釋出，需要重新安排）`)) {
+      return;
+    }
+    btn.disabled = true;
+    call('setWithdrawn', [p.row, withdrawn, reason], freed => {
+      if (withdrawn && freed.length) alert(`已釋出時段：${freed.join('、')}` + (p.status ? '\n\n此受試者之前已收過邀請信，如有需要請自行回信確認取消。' : ''));
+      load();
+    }, err => { btn.disabled = false; alert('失敗：' + err.message); });
+  }
+
   function showReplies(p) {
     const btn = document.getElementById('repliesBtn');
     const box = document.getElementById('replies');
@@ -524,6 +565,7 @@
 
   document.getElementById('search').oninput = renderList;
   document.getElementById('hideDone').onchange = renderList;
+  document.getElementById('showOut').onchange = renderList;
   document.getElementById('reload').onclick = load;
   document.getElementById('summaryBtn').onclick = () => { current = null; ttDraft = null; renderList(); renderSummary(true); };
   document.getElementById('ttBtn').onclick = () => {
