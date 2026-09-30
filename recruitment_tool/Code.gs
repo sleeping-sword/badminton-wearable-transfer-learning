@@ -10,6 +10,8 @@
  *   - 讀取 Gmail 中受試者對邀請信的回覆（只看主旨含 REPLY_SUBJECT_KEYWORD 的信）
  *   - 報名人數上限：回覆數達上限時自動關閉表單
  *   - 標記受試者退出：釋出時段、從名單與統計中隱藏（資料保留，可恢復）
+ *   - 特殊情況信件：資料有誤或時段已額滿時，先寄信與受試者確認（不排時段）
+ *   - 「收支表」分頁：登記收入與支出（受試者費 / 教練費 / 其他）；登記受試者費會自動勾選「受測完畢」
  *
  * 帳密不寫在程式碼中：由試算表選單「受試者工具 → 設定登入帳密」設定，
  * 以加鹽 SHA-256 存在 Script Properties。
@@ -19,7 +21,10 @@ const CONFIG = {
   SHEET_NAME: '表單回覆 1',
   STATUS_HEADER: '邀請信狀態',
   WITHDRAWN_HEADER: '退出',
+  TESTED_HEADER: '受測完畢',
+  SPECIAL_HEADER: '特殊信件',
   TIMETABLE_SHEET: 'time table',
+  FINANCE_SHEET: '收支表',
 
   // 測驗場次：每場 SLOT_MINUTES 分鐘，場與場之間留 BUFFER_MINUTES 分鐘
   // 修改後需刪除「time table」分頁，下次開啟面板時會依新設定重建
@@ -35,6 +40,7 @@ const CONFIG = {
 
   // 邀請信內容設定（可直接在面板中再修改每封信）
   SUBJECT: '【羽球揮拍動作分析研究】測驗時間邀請',
+  SPECIAL_SUBJECT: '【羽球揮拍動作分析研究】報名資料確認', // 特殊情況信件主旨（需含 REPLY_SUBJECT_KEYWORD 才讀得到回覆）
   LOCATION: '政大體育館內一樓',
   DURATION: '約 20 分鐘',
   SENDER: '政大資科系羽球揮拍動作分析團隊', // 寄件者顯示名稱
@@ -78,6 +84,15 @@ const CONFIRMED_MARK = '已確認';
 const EMPTY_ASSIGNMENT = ['', '', '', '', '']; // 姓名～已確認（C:G）
 
 const MODE_LABELS = { send: '已寄出', draft: '已建立草稿', assign: '已安排（未寄信）' };
+
+const FINANCE_HEADERS = ['編號', '日期', '收支', '類別', '金額', '受試者', '回覆列號', '來源／用途', '備註', '登記時間'];
+const FINANCE_FORMATS = ['@', '@', '@', '@', '#,##0', '@', '0', '@', '@', '@'];
+const FINANCE_CATEGORIES = {
+  income: { type: '收入', label: '收入' },
+  subjectFee: { type: '支出', label: '受試者費' },
+  coachFee: { type: '支出', label: '教練費' },
+  other: { type: '支出', label: '其他' },
+};
 
 // ───────────────────────── 入口 ─────────────────────────
 
@@ -260,6 +275,48 @@ function getTimetableSheet_() {
   return sheet;
 }
 
+/** 取得收支表分頁，不存在時建立 */
+function getFinanceSheet_() {
+  const ss = getSpreadsheet_();
+  let sheet = ss.getSheetByName(CONFIG.FINANCE_SHEET);
+  if (sheet) return sheet;
+  sheet = ss.insertSheet(CONFIG.FINANCE_SHEET);
+  sheet.getRange(1, 1, 1, FINANCE_HEADERS.length).setValues([FINANCE_HEADERS]).setFontWeight('bold').setBackground('#f3f3f3');
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidth(1, 90);
+  sheet.setColumnWidth(8, 220);
+  sheet.setColumnWidth(10, 140);
+  return sheet;
+}
+
+/** 解析收支表（getValues 的結果）：[{id, date, type, category, amount, name, row, purpose, note, created, sheetRow}] */
+function parseFinance_(values) {
+  const tz = Session.getScriptTimeZone();
+  const text = function (v) {
+    return v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy/MM/dd') : String(v == null ? '' : v).trim();
+  };
+  const out = [];
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    const amount = Number(String(r[4]).replace(/[,\s]/g, ''));
+    if (!text(r[2]) || !(amount > 0)) continue;
+    out.push({
+      id: text(r[0]),
+      date: dateKey_(text(r[1])) || text(r[1]),
+      type: text(r[2]),
+      category: text(r[3]),
+      amount: amount,
+      name: text(r[5]),
+      row: Number(r[6]) || null,
+      purpose: text(r[7]),
+      note: text(r[8]),
+      created: text(r[9]),
+      sheetRow: i + 1,
+    });
+  }
+  return out;
+}
+
 /** 依場次切出時段：[{date, time: '19:40–20:00'}] */
 function generateSlots_() {
   const out = [];
@@ -355,11 +412,13 @@ function withLock_(fn) {
 function getData(token) {
   requireSession_(token);
   const ttValues = getTimetableSheet_().getDataRange().getDisplayValues();
-  return buildData_(getSheet_().getDataRange().getDisplayValues(), ttValues);
+  const finance = parseFinance_(getFinanceSheet_().getDataRange().getValues());
+  return buildData_(getSheet_().getDataRange().getDisplayValues(), ttValues, finance);
 }
 
 /** 純資料處理（不碰 SpreadsheetApp，方便本機測試） */
-function buildData_(values, ttValues) {
+function buildData_(values, ttValues, finance) {
+  finance = finance || [];
   const headers = values[0] || [];
   const col = {};
   Object.keys(FIELD_KEYWORDS).forEach(function (key) {
@@ -367,6 +426,8 @@ function buildData_(values, ttValues) {
   });
   col.status = headers.indexOf(CONFIG.STATUS_HEADER);
   col.withdrawn = headers.indexOf(CONFIG.WITHDRAWN_HEADER);
+  col.tested = headers.indexOf(CONFIG.TESTED_HEADER);
+  col.special = headers.indexOf(CONFIG.SPECIAL_HEADER);
 
   const get = function (row, key) { return col[key] >= 0 ? String(row[col[key]] || '').trim() : ''; };
   const timetable = parseTimetable_(ttValues);
@@ -409,6 +470,11 @@ function buildData_(values, ttValues) {
       warnings.push('在時段表中被排了 ' + assigned.length + ' 個時段，請編輯時段表修正');
     }
     const assignedSlot = assigned.length ? assigned[0].id : '';
+    // 符合可配合時間的時段都已排給其他人
+    const slotsFull = !withdrawn && !assignedSlot && compatibleSlots.length > 0 && timetable.every(function (s) {
+      return compatibleSlots.indexOf(s.id) < 0 || (s.row && s.row !== i + 1);
+    });
+    if (slotsFull) warnings.push('時段已額滿：符合可配合時間的 ' + compatibleSlots.length + ' 個時段都已排給其他人');
     const statusSlot = status.split('｜')[1] || '';
     if (withdrawn && assignedSlot) {
       warnings.push('已標記退出，但仍排在時段表「' + assignedSlot + '」，請編輯時段表移除');
@@ -433,6 +499,11 @@ function buildData_(values, ttValues) {
       confirmed: assigned.length ? assigned[0].confirmed : false,
       status: status,
       withdrawn: withdrawn,
+      slotsFull: slotsFull,
+      tested: isConfirmed_(get(row, 'tested')),
+      special: get(row, 'special'),
+      fees: finance.filter(function (e) { return e.category === FINANCE_CATEGORIES.subjectFee.label && e.row === i + 1; })
+        .map(function (e) { return e.amount; }),
       warnings: warnings,
     });
   }
@@ -459,6 +530,11 @@ function buildData_(values, ttValues) {
     participants: participants,
     timetable: timetable.map(function (s) {
       return { id: s.id, date: s.date, time: s.time, row: s.row, name: s.name, email: s.email, updated: s.updated, confirmed: s.confirmed };
+    }),
+    finance: finance.map(function (e) {
+      const c = Object.assign({}, e);
+      delete c.sheetRow;
+      return c;
     }),
     config: CONFIG,
   };
@@ -717,5 +793,93 @@ function setWithdrawn(token, row, withdrawn, reason) {
     sheet.getRange(person.row, getHeaderColumn_(sheet, CONFIG.WITHDRAWN_HEADER))
       .setValue(withdrawn ? '已退出 ' + now_() + (reason ? '｜' + reason : '') : '');
     return freed;
+  });
+}
+
+// ───────────────────────── 特殊情況信件 ─────────────────────────
+
+/**
+ * 前端呼叫：寄出特殊情況信件（資料有誤、時段已額滿等，先與受試者確認）。
+ * mode: 'send' 直接寄出 / 'draft' 建立 Gmail 草稿。不會排時段，只在「特殊信件」欄記下時間。
+ */
+function sendSpecial(token, row, subject, body, mode) {
+  requireSession_(token);
+  if (mode !== 'send' && mode !== 'draft') throw new Error('未知的動作');
+  return withLock_(function () {
+    const person = getResponse_(row);
+    if (!person.email) throw new Error('此受試者沒有 Email');
+    if (mode === 'send') GmailApp.sendEmail(person.email, String(subject), String(body), { name: CONFIG.SENDER });
+    else GmailApp.createDraft(person.email, String(subject), String(body), { name: CONFIG.SENDER });
+    const sheet = getSheet_();
+    sheet.getRange(person.row, getHeaderColumn_(sheet, CONFIG.SPECIAL_HEADER)).setValue(MODE_LABELS[mode] + ' ' + now_());
+    return true;
+  });
+}
+
+// ───────────────────────── 受測完畢 ─────────────────────────
+
+function setTested_(row, tested) {
+  const sheet = getSheet_();
+  sheet.getRange(row, getHeaderColumn_(sheet, CONFIG.TESTED_HEADER)).insertCheckboxes().setValue(!!tested);
+}
+
+/** 前端呼叫：手動勾選 / 取消受測完畢 */
+function setTested(token, row, tested) {
+  requireSession_(token);
+  return withLock_(function () {
+    setTested_(getResponse_(row).row, tested);
+    return true;
+  });
+}
+
+// ───────────────────────── 收支表 ─────────────────────────
+
+/**
+ * 前端呼叫：新增一筆收支。
+ * entry: {category: income|subjectFee|coachFee|other, date: 'yyyy-mm-dd', amount, row（受試者費）, purpose（收入來源 / 其他用途）, note}
+ * 受試者費會自動把該受試者勾選為受測完畢。
+ */
+function addFinance(token, entry) {
+  requireSession_(token);
+  entry = entry || {};
+  const cat = FINANCE_CATEGORIES[entry.category];
+  if (!cat) throw new Error('未知的類別');
+  const date = dateKey_(String(entry.date || '').replace(/-/g, '/'));
+  if (!date) throw new Error('請填寫日期');
+  const amount = Math.round(Number(entry.amount));
+  if (!(amount > 0)) throw new Error('金額需大於 0');
+  const purpose = String(entry.purpose || '').trim();
+  if (entry.category === 'income' && !purpose) throw new Error('請填寫收入來源');
+  if (entry.category === 'other' && !purpose) throw new Error('請填寫用途');
+
+  return withLock_(function () {
+    let person = null;
+    if (entry.category === 'subjectFee') {
+      if (!entry.row) throw new Error('請選擇受試者');
+      person = getResponse_(entry.row);
+    }
+    const sheet = getFinanceSheet_();
+    const r = sheet.getLastRow() + 1;
+    sheet.getRange(r, 1, 1, FINANCE_HEADERS.length)
+      .setNumberFormats([FINANCE_FORMATS])
+      .setValues([[
+        Utilities.getUuid().slice(0, 8), date, cat.type, cat.label, amount,
+        person ? person.name : '', person ? person.row : '',
+        purpose, String(entry.note || '').trim(), now_(),
+      ]]);
+    if (person) setTested_(person.row, true);
+    return true;
+  });
+}
+
+/** 前端呼叫：刪除一筆收支（不會取消受測完畢的勾選） */
+function deleteFinance(token, id) {
+  requireSession_(token);
+  return withLock_(function () {
+    const sheet = getFinanceSheet_();
+    const entry = parseFinance_(sheet.getDataRange().getValues()).find(function (e) { return e.id && e.id === String(id); });
+    if (!entry) throw new Error('找不到這筆紀錄，請重新整理');
+    sheet.deleteRow(entry.sheetRow);
+    return true;
   });
 }

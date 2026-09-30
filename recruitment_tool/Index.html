@@ -46,7 +46,7 @@
   .warn { background: #fff8c5; border: 1px solid #d4a72c; padding: 6px 10px; border-radius: 6px; margin: 6px 0; }
   .status { color: #1a7f37; margin: 4px 0; }
   label.f { display: block; font-size: 13px; color: #57606a; margin: 10px 0 2px; }
-  select, .main input[type=text], textarea { width: 100%; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 16px; background: #fff; }
+  select, .main input[type=text], .main input[type=date], .main input[type=number], textarea { width: 100%; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 8px; font-size: 16px; background: #fff; }
   .readonly { padding: 8px 10px; background: #f6f8fa; border-radius: 8px; word-break: break-all; }
   textarea { height: 320px; resize: vertical; }
   .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
@@ -75,6 +75,21 @@
   .tt select { padding: 4px 6px; font-size: 15px; }
   .date-head { display: flex; align-items: baseline; gap: 8px; }
   .date-head .muted { font-size: 13px; }
+  .b-full { background: #ffebe9; color: #cf222e; }
+  .b-special { background: #fff1e5; color: #bc4c00; }
+  .special-mode { border-left: 4px solid #bc4c00; padding-left: 12px; }
+  .tested-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid #d0d7de; border-radius: 8px; cursor: pointer; }
+  .tested-toggle input { width: 18px; height: 18px; margin: 0; }
+  .seg { display: inline-flex; border: 1px solid #d0d7de; border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: #f6f8fa; padding: 6px 18px; cursor: pointer; color: inherit; }
+  .seg button + button { border-left: 1px solid #d0d7de; }
+  .seg button.on { background: #0969da; color: #fff; }
+  .fin th { width: auto; }
+  .fin td.amt { text-align: right; white-space: nowrap; }
+  .fin td.date { white-space: nowrap; }
+  .in { color: #1a7f37; }
+  .outm { color: #cf222e; }
+  .fin-form { max-width: 480px; }
   .editbar { position: sticky; top: -16px; background: #fff; padding: 8px 0; z-index: 1; border-bottom: 1px solid #d0d7de; margin-bottom: 8px; }
 
   /* 手機：列表與詳細頁切換顯示 */
@@ -112,6 +127,7 @@
         <span style="flex:1"></span>
         <button class="btn sm" id="summaryBtn">時段總覽</button>
         <button class="btn sm" id="ttBtn">時段表</button>
+        <button class="btn sm" id="finBtn">收支表</button>
         <button class="btn sm" id="reload">重新整理</button>
         <button class="btn sm" id="logoutBtn">登出</button>
       </div>
@@ -181,7 +197,7 @@
   };
 
   // ── 資料 ──
-  let view = 'summary'; // 'summary' | 'timetable' | 'person'
+  let view = 'summary'; // 'summary' | 'timetable' | 'finance' | 'person'
   let REPLY_COUNTS = {}; // {回覆列號: 回信數}
   let ttDraft = null;   // 時段表編輯中的 {slotId: {row, confirmed}}
 
@@ -193,6 +209,7 @@
       renderList();
       if (view === 'person' && current) select(current.row);
       else if (view === 'timetable') renderTimetable();
+      else if (view === 'finance') renderFinance();
       else renderSummary();
       loadReplyCounts();
     }, e => { document.getElementById('list').innerHTML = '<div class="warn">讀取失敗：' + esc(e.message) + '</div>'; });
@@ -234,12 +251,15 @@
     const done = active.filter(p => p.status).length;
     const booked = DATA.timetable.filter(s => s.row).length;
     const confirmed = DATA.timetable.filter(s => s.row && s.confirmed).length;
-    document.getElementById('count').textContent = `共 ${active.length} 人・已通知 ${done}・已確認 ${confirmed}・時段 ${booked}/${DATA.timetable.length}` + (out ? `・已退出 ${out}` : '');
+    const tested = active.filter(p => p.tested).length;
+    document.getElementById('count').textContent = `共 ${active.length} 人・已通知 ${done}・已確認 ${confirmed}・受測完畢 ${tested}・時段 ${booked}/${DATA.timetable.length}` + (out ? `・已退出 ${out}` : '');
     document.getElementById('list').innerHTML = items.map(p => `
       <button class="item ${current && current.row === p.row ? 'active' : ''} ${p.withdrawn ? 'out' : ''}" data-row="${p.row}">
         <span class="name">${esc(p.name || '(未填姓名)')}</span>
-        ${p.withdrawn ? '<span class="badge b-out">已退出</span>' : p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : p.status ? '<span class="badge b-slot">已通知</span>' : ''}
+        ${p.withdrawn ? '<span class="badge b-out">已退出</span>' : p.tested ? '<span class="badge b-done">✅ 受測完畢</span>' : p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : p.status ? '<span class="badge b-slot">已通知</span>' : ''}
         ${REPLY_COUNTS[p.row] ? `<span class="badge b-reply">💬 ${REPLY_COUNTS[p.row]}</span>` : ''}
+        ${p.slotsFull ? '<span class="badge b-full">時段已額滿</span>' : ''}
+        ${p.special ? '<span class="badge b-special">✉ 特殊信</span>' : ''}
         ${p.warnings.length ? '<span class="badge b-warn">需注意</span>' : ''}
         <div class="sub">${esc(p.dept)}・${p.assignedSlot ? '<span class="badge b-slot" style="margin:0">' + esc(slotShort(p.assignedSlot)) + '</span>' : '最希望：' + esc(p.preferred || '—')}</div>
       </button>`).join('') || '<div class="muted" style="padding:12px">沒有符合的受試者</div>';
@@ -278,13 +298,16 @@
     }).join('');
     const noSlot = activePeople().filter(p => !p.compatibleSlots.length).map(p => esc(p.name)).join('、');
     const unbooked = activePeople().filter(p => !p.assignedSlot).length;
+    const testedCount = activePeople().filter(p => p.tested).length;
+    const full = activePeople().filter(p => p.slotsFull).map(p => esc(p.name)).join('、');
     document.getElementById('main').innerHTML = `${BACK}
       <h2>時段總覽</h2>
-      <p class="muted">點選受試者查看完整資料並安排時段、寄出邀請信。尚未安排：${unbooked} 人。</p>
+      <p class="muted">點選受試者查看完整資料並安排時段、寄出邀請信。尚未安排：${unbooked} 人・受測完畢：${testedCount} 人。</p>
       <table class="summary">
         <tr><th>日期</th><th>可配合</th><th>最希望</th><th>已排 / 時段數</th><th>已確認</th></tr>${rows}
       </table>
-      ${noSlot ? `<div class="warn">沒有符合可配合時間的時段：${noSlot}</div>` : ''}`;
+      ${noSlot ? `<div class="warn">沒有符合可配合時間的時段：${noSlot}</div>` : ''}
+      ${full ? `<div class="warn">時段已額滿（可配合的時段都被排走）：${full}</div>` : ''}`;
     bindBack();
     if (openOnMobile) openMain();
   }
@@ -321,7 +344,7 @@
           who = `<select data-slot="${esc(s.id)}"><option value="">（空）</option>${opts}</select>`;
           check = `<input type="checkbox" class="confirm" data-slot="${esc(s.id)}" ${confirmed ? 'checked' : ''} ${row ? '' : 'disabled'} style="width:20px;height:20px">`;
         } else {
-          who = row ? `<a href="#" data-row="${row}">${esc(name)}</a>` : '—';
+          who = row ? `<a href="#" data-row="${row}">${esc(name)}</a>${p && p.tested ? ' <span class="badge b-done" style="margin:0">受測完畢</span>' : ''}` : '—';
           check = !row ? '' : confirmed ? '<span class="badge b-done" style="margin:0">✔ 已確認</span>' : '<span class="muted">未確認</span>';
         }
         const edited = editing && (row !== s.row || confirmed !== s.confirmed);
@@ -411,6 +434,38 @@
     ].join('\n');
   }
 
+  /** 特殊情況信件：把「需注意」的內容寫進信中，請受試者確認資料（不排時段） */
+  function buildSpecialLetter(p, slot) {
+    const c = DATA.config;
+    const lines = [
+      `${p.name} 您好：`,
+      '',
+      '感謝您填寫「羽球揮拍動作分析研究」受試者招募表單！',
+      '我們在整理報名資料時發現以下情況，想先跟您確認：',
+      '',
+      ...(p.warnings.length ? p.warnings.map(w => '・' + w) : ['・（請在此說明需要確認的內容）']),
+      '',
+      '您填寫的資料如下：',
+      `・姓名：${p.name}`,
+      `・學號：${p.studentId}`,
+      `・系級：${p.dept}`,
+      `・Email：${p.email}`,
+      '',
+    ];
+    if (p.slotsFull) {
+      const byDate = {};
+      DATA.timetable.filter(s => !s.row).forEach(s => (byDate[s.date] = byDate[s.date] || []).push(s.time));
+      const dates = Object.keys(byDate);
+      lines.push('很抱歉，您可配合的時段目前已額滿。' + (dates.length ? '想請問您是否可以配合以下仍有空檔的時段：' : ''));
+      dates.forEach(d => lines.push(`・${d}：${byDate[d].join('、')}`));
+      lines.push('');
+    }
+    if (slot) lines.push(`資料確認無誤後，我們預計為您安排的測驗時間為：${slot}（尚未正式確定，確認後會再寄出正式邀請信）`, '');
+    else if (!p.slotsFull) lines.push('確認資料後，我們會再協助您安排測驗時段。', '');
+    lines.push('煩請回覆此信，告知正確的資料或確認上述資料無誤，謝謝！', '', '再次感謝您的協助！', '', ...c.SIGNATURE);
+    return lines.join('\n');
+  }
+
   function slotOptions(p) {
     const free = DATA.timetable.filter(s => !s.row || s.row === p.row);
     const compat = free.filter(s => p.compatibleSlots.includes(s.id));
@@ -442,7 +497,10 @@
       ${p.assignedSlot ? `<div>目前安排：<span class="badge b-slot" style="margin:0">${esc(p.assignedSlot)}</span> ${p.confirmed ? '<span class="badge b-done">✔ 已確認</span>' : '<span class="muted">（受試者尚未確認）</span>'}</div>` : ''}
       ${p.withdrawn ? `<div class="withdrawn">🚫 ${esc(p.withdrawn)}</div>` : ''}
       ${p.status ? `<div class="status">✔ ${esc(p.status)}</div>` : ''}
+      ${p.special ? `<div class="status" style="color:#bc4c00">✉ 特殊信件：${esc(p.special)}</div>` : ''}
       <div class="actions" style="margin-top:6px">
+        <label class="tested-toggle"><input type="checkbox" id="testedCb" ${p.tested ? 'checked' : ''}> 受測完畢</label>
+        ${p.fees.length ? `<span class="muted">已登記受試者費 NT$ ${p.fees.map(fmt).join('、')}</span>` : ''}
         ${p.withdrawn
           ? '<button class="btn" id="restoreBtn">恢復為受試者</button>'
           : '<button class="btn danger" id="withdrawBtn">標記為退出（無法參加）</button>'}
@@ -457,8 +515,8 @@
       <table>${fields}</table>
 
       <div id="inviteSection" ${p.withdrawn ? 'style="display:none"' : ''}>
-      <h3>安排時段與邀請信</h3>
-      <label class="f">測驗時段（已排給其他人的時段不會出現）</label>
+      <h3 id="letterTitle">安排時段與邀請信</h3>
+      <label class="f" id="slotLabel">測驗時段（已排給其他人的時段不會出現）</label>
       <select id="slot">${slots.html}</select>
       ${slots.empty ? '<div class="warn">時段表已全部排滿</div>' : ''}
       <label class="f">收件人（固定為表單填寫的 Email）</label>
@@ -467,13 +525,20 @@
       <input type="text" id="subject" value="${esc(subject)}">
       <label class="f">內容（可直接修改）</label>
       <textarea id="body"></textarea>
-      <div class="actions">
+      <div class="actions" id="inviteActions">
         <button class="btn primary" id="send" ${p.email ? '' : 'disabled'}>寄出邀請信</button>
         <button class="btn" id="draft" ${p.email ? '' : 'disabled'}>建立 Gmail 草稿</button>
         <button class="btn" id="assign">只排時段不寄信</button>
         <button class="btn" id="copy">複製內容</button>
-        <span class="msg" id="msg"></span>
+        <button class="btn" id="specialBtn" style="color:#bc4c00;border-color:#bc4c00">特殊情況信件</button>
       </div>
+      <div class="actions" id="specialActions" style="display:none">
+        <button class="btn primary" id="spSend" ${p.email ? '' : 'disabled'}>寄出特殊信件</button>
+        <button class="btn" id="spDraft" ${p.email ? '' : 'disabled'}>建立 Gmail 草稿</button>
+        <button class="btn" id="spCopy">複製內容</button>
+        <button class="btn" id="spBack">← 回到邀請信</button>
+      </div>
+      <div class="msg" id="msg" style="margin-top:6px"></div>
       </div>`;
     main.scrollTop = 0;
     bindBack();
@@ -482,14 +547,44 @@
     const wBtn = document.getElementById('withdrawBtn') || document.getElementById('restoreBtn');
     wBtn.onclick = () => setWithdrawn(p, !p.withdrawn, wBtn);
 
+    document.getElementById('testedCb').onchange = e => {
+      const cb = e.target;
+      cb.disabled = true;
+      call('setTested', [p.row, cb.checked], () => load(), err => { cb.disabled = false; cb.checked = !cb.checked; alert('失敗：' + err.message); });
+    };
+
     const slotSel = document.getElementById('slot');
     const body = document.getElementById('body');
-    const refresh = () => { body.value = buildLetter(p, slotSel.value); };
-    slotSel.onchange = refresh;
+    const subjectInput = document.getElementById('subject');
+    let special = false;
+    let generated = '';
+    const refresh = () => { body.value = generated = special ? buildSpecialLetter(p, slotSel.value) : buildLetter(p, slotSel.value); };
+    slotSel.onchange = () => {
+      if (body.value !== generated && !confirm('更換時段會重新產生信件內容，目前的修改會消失，確定嗎？')) return;
+      refresh();
+    };
     refresh();
 
+    /** 切換邀請信 / 特殊情況信件 */
+    function setSpecial(on) {
+      if (body.value !== generated && !confirm('切換會重新產生信件內容，目前的修改會消失，確定嗎？')) return;
+      special = on;
+      document.getElementById('inviteSection').classList.toggle('special-mode', on);
+      document.getElementById('letterTitle').textContent = on ? '特殊情況信件（先確認資料，不排時段）' : '安排時段與邀請信';
+      document.getElementById('slotLabel').textContent = on ? '預計安排的時段（選填，只寫在信中，不會排入時段表）' : '測驗時段（已排給其他人的時段不會出現）';
+      document.getElementById('inviteActions').style.display = on ? 'none' : '';
+      document.getElementById('specialActions').style.display = on ? '' : 'none';
+      if (on && !slotSel.querySelector('option[value=""]')) slotSel.insertAdjacentHTML('afterbegin', '<option value="">（不寫時段）</option>');
+      if (on && p.slotsFull) slotSel.value = '';
+      subjectInput.value = on ? DATA.config.SPECIAL_SUBJECT + ' — ' + p.name : subject;
+      refresh();
+      msg('');
+    }
+    document.getElementById('specialBtn').onclick = () => setSpecial(true);
+    document.getElementById('spBack').onclick = () => setSpecial(false);
+
     const msg = t => document.getElementById('msg').textContent = t;
-    const buttons = ['send', 'draft', 'assign'].map(id => document.getElementById(id));
+    const buttons = ['send', 'draft', 'assign', 'spSend', 'spDraft'].map(id => document.getElementById(id));
 
     function submit(mode, question) {
       const slot = slotSel.value;
@@ -509,12 +604,153 @@
       submit('draft', '建立 Gmail 草稿，並把此受試者排入時段：\n{slot}\n\n確定嗎？');
     document.getElementById('assign').onclick = () =>
       submit('assign', '只把此受試者排入時段（不寄信）：\n{slot}\n\n確定嗎？');
-    document.getElementById('copy').onclick = () => {
-      const text = '主旨：' + document.getElementById('subject').value + '\n\n' + body.value;
+    function submitSpecial(mode, question) {
+      if (!confirm(question)) return;
+      buttons.forEach(b => b.disabled = true);
+      msg('處理中…');
+      call('sendSpecial', [p.row, subjectInput.value, body.value, mode], () => {
+        load();
+        setTimeout(() => { const m = document.getElementById('msg'); if (m) m.textContent = '完成'; }, 0);
+      }, err => { buttons.forEach(b => b.disabled = false); msg('失敗：' + err.message); });
+    }
+    document.getElementById('spSend').onclick = () =>
+      submitSpecial('send', `確定要寄出特殊情況信件給 ${p.email} 嗎？\n（不會排入時段表）`);
+    document.getElementById('spDraft').onclick = () =>
+      submitSpecial('draft', '建立特殊情況信件的 Gmail 草稿？\n（不會排入時段表）');
+
+    const copy = () => {
+      const text = '主旨：' + subjectInput.value + '\n\n' + body.value;
       const done = () => msg('已複製');
       if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
       else fallbackCopy(text, done);
     };
+    document.getElementById('copy').onclick = copy;
+    document.getElementById('spCopy').onclick = copy;
+  }
+
+  // ── 收支表 ──
+  const FIN_CATS = { income: '收入', subjectFee: '受試者費', coachFee: '教練費', other: '其他' };
+  let finForm = { kind: 'income', category: 'subjectFee', date: '', amount: '', row: '', purpose: '', note: '' };
+  let finFlash = '';
+
+  function fmt(n) { return Number(n).toLocaleString('en-US'); }
+  function todayISO() {
+    const d = new Date();
+    return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+
+  function renderFinance(openOnMobile) {
+    view = 'finance';
+    current = null;
+    renderList();
+    const F = DATA.finance || [];
+    const sum = f => F.filter(f).reduce((a, e) => a + e.amount, 0);
+    const income = sum(e => e.type === '收入');
+    const expense = sum(e => e.type === '支出');
+    const catSum = label => sum(e => e.type === '支出' && e.category === label);
+    const lastFee = F.filter(e => e.category === FIN_CATS.subjectFee).slice(-1)[0];
+
+    const cat = finForm.kind === 'income' ? 'income' : finForm.category;
+    const amount = finForm.amount || (cat === 'subjectFee' && lastFee ? lastFee.amount : '');
+    const people = activePeople().slice().sort((a, b) =>
+      (a.fees.length - b.fees.length) || (!!b.assignedSlot - !!a.assignedSlot) || a.name.localeCompare(b.name, 'zh-Hant'));
+    const personOpts = people.map(p => `<option value="${p.row}" ${String(p.row) === String(finForm.row) ? 'selected' : ''}>${esc(p.name)}` +
+      `${p.assignedSlot ? '・' + esc(slotShort(p.assignedSlot)) : ''}${p.fees.length ? '（已登記 NT$ ' + p.fees.map(fmt).join('、') + '）' : ''}</option>`).join('');
+
+    const fields = [];
+    if (cat === 'subjectFee') fields.push(`<label class="f">受試者</label><select id="finRow"><option value="">請選擇受試者</option>${personOpts}</select>`);
+    fields.push(`<label class="f">日期</label><input type="date" id="finDate" value="${esc(finForm.date || todayISO())}">`);
+    fields.push(`<label class="f">金額（NT$）</label><input type="number" id="finAmount" min="1" step="1" inputmode="numeric" value="${esc(amount)}">`);
+    if (cat === 'income') fields.push(`<label class="f">來源</label><input type="text" id="finPurpose" placeholder="例：系上補助、指導教授" value="${esc(finForm.purpose)}">`);
+    if (cat === 'other') fields.push(`<label class="f">用途</label><input type="text" id="finPurpose" placeholder="例：購買羽球" value="${esc(finForm.purpose)}">`);
+    fields.push(`<label class="f">備註（選填）</label><input type="text" id="finNote" value="${esc(finForm.note)}">`);
+
+    const entries = F.slice().sort((a, b) => b.date.localeCompare(a.date) || b.created.localeCompare(a.created));
+    const rows = entries.map(e => {
+      const what = e.category === FIN_CATS.subjectFee
+        ? (e.row ? `<a href="#" data-row="${e.row}">${esc(e.name)}</a>` : esc(e.name))
+        : esc(e.purpose);
+      const isIn = e.type === '收入';
+      return `<tr><td class="date">${esc(e.date)}</td><td>${esc(e.category)}</td>
+        <td>${what}${e.note ? `<div class="muted" style="font-size:13px">${esc(e.note)}</div>` : ''}</td>
+        <td class="amt ${isIn ? 'in' : 'outm'}">${isIn ? '+' : '−'}${fmt(e.amount)}</td>
+        <td style="width:1%"><button class="btn sm danger" data-del="${esc(e.id)}">刪除</button></td></tr>`;
+    }).join('');
+
+    const unpaid = activePeople().filter(p => p.tested && !p.fees.length);
+
+    const main = document.getElementById('main');
+    main.innerHTML = `${BACK}
+      <h2>收支表</h2>
+      <table class="summary fin" style="max-width:480px">
+        <tr><th>收入合計</th><td class="amt in">${fmt(income)}</td></tr>
+        <tr><th>支出合計</th><td class="amt outm">${fmt(expense)}</td></tr>
+        <tr><td class="muted">　1. 受試者費</td><td class="amt">${fmt(catSum(FIN_CATS.subjectFee))}（${F.filter(e => e.category === FIN_CATS.subjectFee).length} 筆）</td></tr>
+        <tr><td class="muted">　2. 教練費</td><td class="amt">${fmt(catSum(FIN_CATS.coachFee))}</td></tr>
+        <tr><td class="muted">　3. 其他</td><td class="amt">${fmt(catSum(FIN_CATS.other))}</td></tr>
+        <tr><th>餘額</th><td class="amt"><strong>${fmt(income - expense)}</strong></td></tr>
+      </table>
+      ${unpaid.length ? `<div class="warn">已勾選受測完畢，但尚未登記受試者費：${unpaid.map(p => `<a href="#" data-row="${p.row}">${esc(p.name)}</a>`).join('、')}</div>` : ''}
+
+      <h3>新增紀錄</h3>
+      <div class="fin-form">
+        <div class="seg"><button data-kind="income" class="${finForm.kind === 'income' ? 'on' : ''}">收入</button><button data-kind="expense" class="${finForm.kind === 'expense' ? 'on' : ''}">支出</button></div>
+        ${finForm.kind === 'expense' ? `<label class="f">支出類別</label><select id="finCat">
+          <option value="subjectFee" ${cat === 'subjectFee' ? 'selected' : ''}>1. 受試者費</option>
+          <option value="coachFee" ${cat === 'coachFee' ? 'selected' : ''}>2. 教練費</option>
+          <option value="other" ${cat === 'other' ? 'selected' : ''}>3. 其他</option></select>` : ''}
+        ${fields.join('')}
+        ${cat === 'subjectFee' ? '<div class="muted" style="font-size:13px;margin-top:4px">登記後會自動把此受試者勾選為「受測完畢」</div>' : ''}
+        <div class="actions"><button class="btn primary" id="finAdd">登記</button><span class="msg" id="finMsg">${esc(finFlash)}</span></div>
+      </div>
+
+      <h3>紀錄（${entries.length} 筆）</h3>
+      ${entries.length ? `<table class="fin"><tr><th>日期</th><th>類別</th><th>受試者／來源／用途</th><th>金額</th><th></th></tr>${rows}</table>` : '<p class="muted">還沒有任何紀錄。</p>'}`;
+    finFlash = '';
+    bindBack();
+    if (openOnMobile) { openMain(); main.scrollTop = 0; }
+
+    /** 暫存目前表單的輸入，切換收入 / 支出類別時不會消失 */
+    const keep = () => {
+      const v = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+      ['date', 'amount', 'row', 'purpose', 'note'].forEach(k => {
+        const val = v('fin' + k[0].toUpperCase() + k.slice(1));
+        if (val !== undefined) finForm[k] = val;
+      });
+    };
+    const rerender = () => { const top = main.scrollTop; renderFinance(); main.scrollTop = top; };
+    main.querySelectorAll('.seg button').forEach(b => b.onclick = () => { keep(); finForm.kind = b.dataset.kind; finForm.amount = ''; rerender(); });
+    const catSel = document.getElementById('finCat');
+    if (catSel) catSel.onchange = () => { keep(); finForm.category = catSel.value; finForm.amount = ''; finForm.purpose = ''; rerender(); };
+    main.querySelectorAll('a[data-row]').forEach(a => a.onclick = e => { e.preventDefault(); select(Number(a.dataset.row)); });
+
+    document.getElementById('finAdd').onclick = e => {
+      keep();
+      const entry = { category: cat, date: finForm.date, amount: finForm.amount, row: finForm.row, purpose: finForm.purpose, note: finForm.note };
+      const fmsg = t => document.getElementById('finMsg').textContent = t;
+      if (!entry.date) { fmsg('請填寫日期'); return; }
+      if (!(Number(entry.amount) > 0)) { fmsg('請填寫金額'); return; }
+      if (cat === 'subjectFee') {
+        const p = entry.row && personByRow(Number(entry.row));
+        if (!p) { fmsg('請選擇受試者'); return; }
+        if (p.fees.length && !confirm(`${p.name} 已經登記過受試者費（NT$ ${p.fees.map(fmt).join('、')}），還要再登記一筆嗎？`)) return;
+      }
+      if ((cat === 'income' || cat === 'other') && !entry.purpose.trim()) { fmsg(cat === 'income' ? '請填寫來源' : '請填寫用途'); return; }
+      e.target.disabled = true;
+      fmsg('登記中…');
+      call('addFinance', [entry], () => {
+        finFlash = `已登記 ${FIN_CATS[cat]} NT$ ${fmt(entry.amount)}` + (cat === 'subjectFee' ? '，已勾選受測完畢' : '');
+        finForm = { kind: finForm.kind, category: finForm.category, date: finForm.date, amount: '', row: '', purpose: '', note: '' };
+        load();
+      }, err => { e.target.disabled = false; fmsg('失敗：' + err.message); });
+    };
+    main.querySelectorAll('button[data-del]').forEach(b => b.onclick = () => {
+      const e = F.find(x => x.id === b.dataset.del);
+      if (!confirm(`刪除這筆紀錄？\n${e.date} ${e.category} ${e.name || e.purpose} NT$ ${fmt(e.amount)}` +
+        (e.category === FIN_CATS.subjectFee ? '\n\n（不會取消受測完畢的勾選）' : ''))) return;
+      b.disabled = true;
+      call('deleteFinance', [e.id], () => load(), err => { b.disabled = false; alert('刪除失敗：' + err.message); });
+    });
   }
 
   /** 標記退出 / 恢復：退出會釋出時段，不會寄信，表單回覆資料保留 */
@@ -572,6 +808,11 @@
     if (ttDraft && !confirm('放棄尚未儲存的時段表變更？')) return;
     ttDraft = null;
     renderTimetable(true);
+  };
+  document.getElementById('finBtn').onclick = () => {
+    if (ttDraft && !confirm('放棄尚未儲存的時段表變更？')) return;
+    ttDraft = null;
+    renderFinance(true);
   };
 
   TOKEN = loadToken();
