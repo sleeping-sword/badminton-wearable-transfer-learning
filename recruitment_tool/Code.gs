@@ -12,6 +12,8 @@
  *   - 標記受試者退出：釋出時段、從名單與統計中隱藏（資料保留，可恢復）
  *   - 特殊情況信件：資料有誤或時段已額滿時，先寄信與受試者確認（不排時段）
  *   - 「收支表」分頁：登記收入與支出（受試者費 / 教練費 / 其他）；登記受試者費會自動勾選「受測完畢」
+ *   - 更正收件人 Email：受試者填錯時可在面板更正（存在「更正 Email」欄，表單原始回覆不變）
+ *   - 測驗前提醒信：測驗開始前 REMINDER_MINUTES 分鐘自動寄出，文字與附加圖片可在面板修改
  *
  * 帳密不寫在程式碼中：由試算表選單「受試者工具 → 設定登入帳密」設定，
  * 以加鹽 SHA-256 存在 Script Properties。
@@ -23,6 +25,7 @@ const CONFIG = {
   WITHDRAWN_HEADER: '退出',
   TESTED_HEADER: '受測完畢',
   SPECIAL_HEADER: '特殊信件',
+  EMAIL_FIX_HEADER: '更正 Email', // 有填時取代表單填寫的 Email
   TIMETABLE_SHEET: 'time table',
   FINANCE_SHEET: '收支表',
 
@@ -54,6 +57,13 @@ const CONFIG = {
     '若當天身體不適或臨時無法出席，請提前回信告知。',
   ],
 
+  // 測驗前提醒信（主旨、內容、附加圖片在面板「提醒信」中修改，這裡只是預設值）
+  REMINDER_MINUTES: 10, // 測驗開始前幾分鐘寄出
+  REMINDER_SUBJECT: '【羽球揮拍動作分析研究】測驗即將開始提醒',
+  REMINDER_MAX_IMAGES: 5,
+  REMINDER_MAX_IMAGE_MB: 5,
+  REMINDER_FOLDER_NAME: '受試者工具－提醒信附件', // 附加圖片存放的雲端硬碟資料夾
+
   // 讀取受試者回覆：只看主旨包含此關鍵字、且是受試者寄來的信（其他私人信件不會被讀取）
   REPLY_SUBJECT_KEYWORD: '羽球揮拍動作分析研究',
   REPLY_SEARCH_DAYS: 90,
@@ -79,9 +89,11 @@ const FIELD_KEYWORDS = {
   preferred: '最希望',
 };
 
-const TIMETABLE_HEADERS = ['日期', '時間', '姓名', 'Email', '回覆列號', '更新時間', '已確認'];
+const TIMETABLE_HEADERS = ['日期', '時間', '姓名', 'Email', '回覆列號', '更新時間', '已確認', '提醒信'];
 const CONFIRMED_MARK = '已確認';
-const EMPTY_ASSIGNMENT = ['', '', '', '', '']; // 姓名～已確認（C:G）
+const EMPTY_ASSIGNMENT = ['', '', '', '', '', '']; // 姓名～提醒信（C:H）
+const REMINDER_COLUMN = TIMETABLE_HEADERS.length;
+const REMINDER_HANDLER = 'sendDueReminders';
 
 const MODE_LABELS = { send: '已寄出', draft: '已建立草稿', assign: '已安排（未寄信）' };
 
@@ -256,10 +268,12 @@ function getTimetableSheet_() {
   const ss = getSpreadsheet_();
   let sheet = ss.getSheetByName(CONFIG.TIMETABLE_SHEET);
   if (sheet) {
-    // 舊版建立的分頁沒有「已確認」欄，補上表頭
-    const last = TIMETABLE_HEADERS.length;
-    if (sheet.getRange(1, last).getDisplayValue() !== TIMETABLE_HEADERS[last - 1]) {
-      sheet.getRange(1, last).setValue(TIMETABLE_HEADERS[last - 1]).setFontWeight('bold').setBackground('#f3f3f3');
+    // 舊版建立的分頁沒有「已確認」「提醒信」欄，補上表頭
+    const headers = sheet.getRange(1, 1, 1, TIMETABLE_HEADERS.length).getDisplayValues()[0];
+    for (let c = 6; c < TIMETABLE_HEADERS.length; c++) {
+      if (headers[c] !== TIMETABLE_HEADERS[c]) {
+        sheet.getRange(1, c + 1).setValue(TIMETABLE_HEADERS[c]).setFontWeight('bold').setBackground('#f3f3f3');
+      }
     }
     return sheet;
   }
@@ -338,7 +352,7 @@ function fromMinutes_(min) {
   return ('0' + Math.floor(min / 60)).slice(-2) + ':' + ('0' + (min % 60)).slice(-2);
 }
 
-/** 解析時段表：[{id, date, time, row, name, email, updated, sheetRow}] */
+/** 解析時段表：[{id, date, time, row, name, email, updated, confirmed, reminded, sheetRow}] */
 function parseTimetable_(values) {
   const slots = [];
   for (let i = 1; i < values.length; i++) {
@@ -355,6 +369,7 @@ function parseTimetable_(values) {
       row: Number(r[4]) || null,
       updated: String(r[5] || '').trim(),
       confirmed: isConfirmed_(r[6]),
+      reminded: String(r[7] || '').trim(),
       sheetRow: i + 1,
     });
   }
@@ -377,7 +392,7 @@ function getHeaderColumn_(sheet, header) {
   return lastCol + 1;
 }
 
-/** 讀取回覆列的姓名與 Email，並驗證列號 */
+/** 讀取回覆列的姓名與 Email（有更正過則用更正後的），並驗證列號 */
 function getResponse_(row) {
   row = Number(row);
   const sheet = getSheet_();
@@ -389,7 +404,15 @@ function getResponse_(row) {
     return c >= 0 ? String(values[c]).trim() : '';
   };
   const wCol = headers.indexOf(CONFIG.WITHDRAWN_HEADER);
-  return { row: row, name: pick('name'), email: pick('email'), withdrawn: wCol >= 0 && !!String(values[wCol]).trim() };
+  const fCol = headers.indexOf(CONFIG.EMAIL_FIX_HEADER);
+  const originalEmail = pick('email');
+  return {
+    row: row,
+    name: pick('name'),
+    email: (fCol >= 0 && String(values[fCol]).trim()) || originalEmail,
+    originalEmail: originalEmail,
+    withdrawn: wCol >= 0 && !!String(values[wCol]).trim(),
+  };
 }
 
 function now_() {
@@ -413,7 +436,9 @@ function getData(token) {
   requireSession_(token);
   const ttValues = getTimetableSheet_().getDataRange().getDisplayValues();
   const finance = parseFinance_(getFinanceSheet_().getDataRange().getValues());
-  return buildData_(getSheet_().getDataRange().getDisplayValues(), ttValues, finance);
+  const data = buildData_(getSheet_().getDataRange().getDisplayValues(), ttValues, finance);
+  data.reminder = getReminderSettings_();
+  return data;
 }
 
 /** 純資料處理（不碰 SpreadsheetApp，方便本機測試） */
@@ -428,6 +453,7 @@ function buildData_(values, ttValues, finance) {
   col.withdrawn = headers.indexOf(CONFIG.WITHDRAWN_HEADER);
   col.tested = headers.indexOf(CONFIG.TESTED_HEADER);
   col.special = headers.indexOf(CONFIG.SPECIAL_HEADER);
+  col.emailFix = headers.indexOf(CONFIG.EMAIL_FIX_HEADER);
 
   const get = function (row, key) { return col[key] >= 0 ? String(row[col[key]] || '').trim() : ''; };
   const timetable = parseTimetable_(ttValues);
@@ -458,7 +484,8 @@ function buildData_(values, ttValues, finance) {
     }).map(function (s) { return s.id; });
     if (!compatibleSlots.length && !withdrawn) warnings.push('時段表中沒有符合此受試者可配合時間的時段');
 
-    const email = get(row, 'email');
+    const originalEmail = get(row, 'email');
+    const email = get(row, 'emailFix') || originalEmail;
     const studentId = get(row, 'studentId');
     const emailId = (email.match(/^(\d+)@(g\.)?nccu\.edu\.tw$/i) || [])[1];
     if (emailId && /^\d+$/.test(studentId) && emailId !== studentId) {
@@ -490,6 +517,7 @@ function buildData_(values, ttValues, finance) {
       name: get(row, 'name'),
       dept: get(row, 'dept'),
       email: email,
+      originalEmail: originalEmail,
       studentId: studentId,
       preferred: preferred,
       preferredKey: prefKey,
@@ -529,7 +557,7 @@ function buildData_(values, ttValues, finance) {
     headers: headers,
     participants: participants,
     timetable: timetable.map(function (s) {
-      return { id: s.id, date: s.date, time: s.time, row: s.row, name: s.name, email: s.email, updated: s.updated, confirmed: s.confirmed };
+      return { id: s.id, date: s.date, time: s.time, row: s.row, name: s.name, email: s.email, updated: s.updated, confirmed: s.confirmed, reminded: s.reminded };
     }),
     finance: finance.map(function (e) {
       const c = Object.assign({}, e);
@@ -636,10 +664,12 @@ function getReplyCounts(token) {
 
   const values = getSheet_().getDataRange().getDisplayValues();
   const emailCol = (values[0] || []).findIndex(function (h) { return h.indexOf(FIELD_KEYWORDS.email) >= 0; });
+  const fixCol = (values[0] || []).indexOf(CONFIG.EMAIL_FIX_HEADER);
   const counts = {};
   if (emailCol < 0) return counts;
   for (let i = 1; i < values.length; i++) {
-    const n = byEmail[normEmail_(values[i][emailCol])];
+    const fixed = fixCol >= 0 ? String(values[i][fixCol]).trim() : '';
+    const n = byEmail[normEmail_(fixed || values[i][emailCol])];
     if (n) counts[i + 1] = n;
   }
   return counts;
@@ -682,7 +712,7 @@ function stripQuoted_(text) {
 /**
  * 前端呼叫：為受試者安排時段並寄信。
  * mode: 'send' 直接寄出 / 'draft' 建立 Gmail 草稿 / 'assign' 只排時段不寄信
- * 收件人一律用試算表中該列的 Email，不接受前端指定。
+ * 收件人一律用試算表中該列的 Email（有更正過則用「更正 Email」欄），不接受前端在寄信時指定。
  * 時段若已被其他人佔用會拒絕，且在寄信前檢查，避免寄出錯誤時間。
  */
 function sendInvite(token, row, slotId, subject, body, mode) {
@@ -714,7 +744,8 @@ function sendInvite(token, row, slotId, subject, body, mode) {
     // 同一時段重寄保留確認狀態；換到新時段需重新確認
     const keepConfirmed = target.row === person.row && target.confirmed;
     ttSheet.getRange(target.sheetRow, 3, 1, EMPTY_ASSIGNMENT.length)
-      .setValues([[person.name, person.email, person.row, stamp, keepConfirmed ? CONFIRMED_MARK : '']]);
+      .setValues([[person.name, person.email, person.row, stamp, keepConfirmed ? CONFIRMED_MARK : '',
+        target.row === person.row ? target.reminded : '']]);
 
     const sheet = getSheet_();
     sheet.getRange(person.row, getHeaderColumn_(sheet, CONFIG.STATUS_HEADER)).setValue(MODE_LABELS[mode] + ' ' + stamp + '｜' + slotId);
@@ -759,7 +790,8 @@ function saveTimetable(token, assignments) {
       if (c.row) {
         const p = getResponse_(c.row);
         if (p.withdrawn) throw new Error(p.name + ' 已標記退出，不能排入時段');
-        values = [p.name, p.email, p.row, stamp, c.confirmed ? CONFIRMED_MARK : ''];
+        // 只改確認狀態時保留提醒信紀錄；換人後需重新提醒
+        values = [p.name, p.email, p.row, stamp, c.confirmed ? CONFIRMED_MARK : '', c.row === c.slot.row ? c.slot.reminded : ''];
       }
       ttSheet.getRange(c.slot.sheetRow, 3, 1, EMPTY_ASSIGNMENT.length).setValues([values]);
     });
@@ -813,6 +845,216 @@ function sendSpecial(token, row, subject, body, mode) {
     const sheet = getSheet_();
     sheet.getRange(person.row, getHeaderColumn_(sheet, CONFIG.SPECIAL_HEADER)).setValue(MODE_LABELS[mode] + ' ' + now_());
     return true;
+  });
+}
+
+// ───────────────────────── 更正 Email ─────────────────────────
+
+/**
+ * 前端呼叫：更正受試者的收件 Email（填錯時手動修正）。
+ * 寫在「更正 Email」欄，表單原始回覆不變；填空白或與原本相同則取消更正。
+ * 時段表中的 Email 會同步更新。回傳更正後實際使用的 Email。
+ */
+function setEmail(token, row, email) {
+  requireSession_(token);
+  email = String(email || '').trim();
+  if (email && !emailAliases_(email).length) throw new Error('Email 格式不正確');
+  return withLock_(function () {
+    const person = getResponse_(row);
+    const fix = email && email !== person.originalEmail ? email : '';
+    const sheet = getSheet_();
+    sheet.getRange(person.row, getHeaderColumn_(sheet, CONFIG.EMAIL_FIX_HEADER)).setNumberFormat('@').setValue(fix);
+
+    const effective = fix || person.originalEmail;
+    const ttSheet = getTimetableSheet_();
+    parseTimetable_(ttSheet.getDataRange().getDisplayValues()).forEach(function (s) {
+      if (s.row === person.row) ttSheet.getRange(s.sheetRow, 4).setValue(effective);
+    });
+    return effective;
+  });
+}
+
+// ───────────────────────── 測驗前提醒信 ─────────────────────────
+
+function defaultReminderBody_() {
+  return [
+    '{姓名} 您好：',
+    '',
+    '提醒您，「羽球揮拍動作分析研究」的測驗即將在 ' + CONFIG.REMINDER_MINUTES + ' 分鐘後開始：',
+    '',
+    '・測驗時間：{日期} {時間}',
+    '・測驗地點：{地點}',
+    '',
+    '請準時抵達，到場後直接向工作人員報到即可。',
+    '若臨時無法出席，請直接回覆此信告知。',
+    '',
+  ].concat(CONFIG.SIGNATURE).join('\n');
+}
+
+/** 提醒信設定（存在 Script Properties）：{enabled, subject, body, images: [{id, name}], minutes, triggerActive} */
+function getReminderSettings_() {
+  const props = PropertiesService.getScriptProperties().getProperties();
+  let images = [];
+  try { images = JSON.parse(props.REMINDER_IMAGES || '[]'); } catch (e) {}
+  return {
+    enabled: props.REMINDER_ENABLED === '1',
+    subject: props.REMINDER_SUBJECT || CONFIG.REMINDER_SUBJECT,
+    body: props.REMINDER_BODY || defaultReminderBody_(),
+    images: images,
+    minutes: CONFIG.REMINDER_MINUTES,
+    triggerActive: hasReminderTrigger_(),
+  };
+}
+
+function hasReminderTrigger_() {
+  return ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === REMINDER_HANDLER; });
+}
+
+function checkReminderText_(subject, body) {
+  subject = String(subject || '').trim();
+  body = String(body || '');
+  if (!subject) throw new Error('請填寫主旨');
+  if (!body.trim()) throw new Error('請填寫內容');
+  if (body.length > 2500) throw new Error('內容過長（上限 2500 字）');
+  return { subject: subject, body: body };
+}
+
+/** 前端呼叫：儲存提醒信主旨、內容與是否啟用；啟用時建立每分鐘檢查一次的觸發條件 */
+function saveReminder(token, settings) {
+  requireSession_(token);
+  settings = settings || {};
+  const text = checkReminderText_(settings.subject, settings.body);
+  return withLock_(function () {
+    PropertiesService.getScriptProperties().setProperties({
+      REMINDER_ENABLED: settings.enabled ? '1' : '0',
+      REMINDER_SUBJECT: text.subject,
+      REMINDER_BODY: text.body,
+    });
+    if (settings.enabled) {
+      if (!hasReminderTrigger_()) ScriptApp.newTrigger(REMINDER_HANDLER).timeBased().everyMinutes(1).create();
+    } else {
+      ScriptApp.getProjectTriggers().forEach(function (t) {
+        if (t.getHandlerFunction() === REMINDER_HANDLER) ScriptApp.deleteTrigger(t);
+      });
+    }
+    return true;
+  });
+}
+
+function getReminderFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('REMINDER_FOLDER_ID');
+  if (id) {
+    try {
+      const folder = DriveApp.getFolderById(id);
+      if (!folder.isTrashed()) return folder;
+    } catch (e) {}
+  }
+  const created = DriveApp.createFolder(CONFIG.REMINDER_FOLDER_NAME);
+  props.setProperty('REMINDER_FOLDER_ID', created.getId());
+  return created;
+}
+
+/** 前端呼叫：新增一張提醒信附加圖片（存到雲端硬碟），回傳更新後的圖片清單 */
+function addReminderImage(token, name, mimeType, base64) {
+  requireSession_(token);
+  if (!/^image\//.test(String(mimeType))) throw new Error('只能附加圖片檔');
+  const bytes = Utilities.base64Decode(String(base64));
+  if (bytes.length > CONFIG.REMINDER_MAX_IMAGE_MB * 1024 * 1024) throw new Error('圖片不能超過 ' + CONFIG.REMINDER_MAX_IMAGE_MB + ' MB');
+  name = String(name || 'image').replace(/[\\/]/g, '_').slice(0, 100);
+  return withLock_(function () {
+    const images = getReminderSettings_().images;
+    if (images.length >= CONFIG.REMINDER_MAX_IMAGES) throw new Error('最多只能附加 ' + CONFIG.REMINDER_MAX_IMAGES + ' 張圖片');
+    const file = getReminderFolder_().createFile(Utilities.newBlob(bytes, mimeType, name));
+    images.push({ id: file.getId(), name: name });
+    PropertiesService.getScriptProperties().setProperty('REMINDER_IMAGES', JSON.stringify(images));
+    return images;
+  });
+}
+
+/** 前端呼叫：移除一張附加圖片（只能移除清單中的檔案），回傳更新後的圖片清單 */
+function removeReminderImage(token, id) {
+  requireSession_(token);
+  return withLock_(function () {
+    const images = getReminderSettings_().images;
+    const kept = images.filter(function (img) { return img.id !== String(id); });
+    if (kept.length === images.length) throw new Error('找不到這張圖片，請重新整理');
+    try { DriveApp.getFileById(String(id)).setTrashed(true); } catch (e) {}
+    PropertiesService.getScriptProperties().setProperty('REMINDER_IMAGES', JSON.stringify(kept));
+    return kept;
+  });
+}
+
+/** 寄出一封提醒信；{姓名} {日期} {時間} {地點} 會代換成實際內容 */
+function sendReminder_(to, vars, subject, body, images) {
+  const fill = function (text) {
+    return String(text).replace(/\{(姓名|日期|時間|地點)\}/g, function (_, key) { return vars[key] || ''; });
+  };
+  const options = { name: CONFIG.SENDER };
+  const blobs = [];
+  images.forEach(function (img) {
+    try {
+      blobs.push(DriveApp.getFileById(img.id).getBlob().setName(img.name));
+    } catch (e) {
+      console.error('提醒信附加圖片讀取失敗：' + img.name + '｜' + e.message);
+    }
+  });
+  if (blobs.length) options.attachments = blobs;
+  GmailApp.sendEmail(to, fill(subject), fill(body), options);
+}
+
+/** 前端呼叫：用目前畫面上的主旨與內容（不需先儲存）寄一封測試信給自己，回傳收件信箱 */
+function sendReminderTest(token, subject, body) {
+  requireSession_(token);
+  const text = checkReminderText_(subject, body);
+  const to = Session.getEffectiveUser().getEmail();
+  const slot = generateSlots_()[0] || { date: '2026/10/13（二）', time: '19:40–20:00' };
+  sendReminder_(to, { 姓名: '測試受試者', 日期: slot.date, 時間: slot.time, 地點: CONFIG.LOCATION },
+    '【測試】' + text.subject, text.body, getReminderSettings_().images);
+  return to;
+}
+
+/** 時段開始時間（Date）；格式不對回傳 null */
+function slotStart_(slot) {
+  const key = dateKey_(slot.date);
+  const minutes = toMinutes_(slot.time);
+  if (!key || isNaN(minutes)) return null;
+  return Utilities.parseDate(key + ' ' + fromMinutes_(minutes), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm');
+}
+
+/** 已排人、還沒寄過提醒信、且在 REMINDER_MINUTES 分鐘內開始的時段 */
+function dueReminderSlots_(ttSheet) {
+  const now = Date.now();
+  return parseTimetable_(ttSheet.getDataRange().getDisplayValues()).filter(function (s) {
+    if (!s.row || s.reminded) return false;
+    const start = slotStart_(s);
+    return !!start && start.getTime() > now && start.getTime() - now <= CONFIG.REMINDER_MINUTES * 60 * 1000;
+  });
+}
+
+/**
+ * 觸發條件（每分鐘）：寄出即將開始時段的提醒信，並在時段表「提醒信」欄記下時間，每個時段只寄一次。
+ * 已退出或沒有 Email 的受試者不寄；單一封寄送失敗不影響其他人，下一分鐘會再試。
+ */
+function sendDueReminders() {
+  if (PropertiesService.getScriptProperties().getProperty('REMINDER_ENABLED') !== '1') return;
+  if (!dueReminderSlots_(getTimetableSheet_()).length) return;
+
+  withLock_(function () {
+    const ttSheet = getTimetableSheet_();
+    const settings = getReminderSettings_();
+    dueReminderSlots_(ttSheet).forEach(function (s) {
+      try {
+        const person = getResponse_(s.row);
+        if (person.withdrawn || !person.email) return;
+        sendReminder_(person.email, { 姓名: person.name, 日期: s.date, 時間: s.time, 地點: CONFIG.LOCATION },
+          settings.subject, settings.body, settings.images);
+        ttSheet.getRange(s.sheetRow, REMINDER_COLUMN).setValue('已寄出 ' + now_());
+        SpreadsheetApp.flush();
+      } catch (e) {
+        console.error('提醒信寄送失敗：' + s.id + '｜' + e.message);
+      }
+    });
   });
 }
 

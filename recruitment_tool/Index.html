@@ -90,6 +90,9 @@
   .in { color: #1a7f37; }
   .outm { color: #cf222e; }
   .fin-form { max-width: 480px; }
+  .email-row { display: flex; gap: 8px; }
+  .email-row input { flex: 1; min-width: 0; }
+  .rem-img { display: flex; align-items: center; gap: 8px; padding: 4px 0; word-break: break-all; }
   .editbar { position: sticky; top: -16px; background: #fff; padding: 8px 0; z-index: 1; border-bottom: 1px solid #d0d7de; margin-bottom: 8px; }
 
   /* 手機：列表與詳細頁切換顯示 */
@@ -128,6 +131,7 @@
         <button class="btn sm" id="summaryBtn">時段總覽</button>
         <button class="btn sm" id="ttBtn">時段表</button>
         <button class="btn sm" id="finBtn">收支表</button>
+        <button class="btn sm" id="remBtn">提醒信</button>
         <button class="btn sm" id="reload">重新整理</button>
         <button class="btn sm" id="logoutBtn">登出</button>
       </div>
@@ -197,7 +201,7 @@
   };
 
   // ── 資料 ──
-  let view = 'summary'; // 'summary' | 'timetable' | 'finance' | 'person'
+  let view = 'summary'; // 'summary' | 'timetable' | 'finance' | 'reminder' | 'person'
   let REPLY_COUNTS = {}; // {回覆列號: 回信數}
   let ttDraft = null;   // 時段表編輯中的 {slotId: {row, confirmed}}
 
@@ -210,6 +214,7 @@
       if (view === 'person' && current) select(current.row);
       else if (view === 'timetable') renderTimetable();
       else if (view === 'finance') renderFinance();
+      else if (view === 'reminder') renderReminder();
       else renderSummary();
       loadReplyCounts();
     }, e => { document.getElementById('list').innerHTML = '<div class="warn">讀取失敗：' + esc(e.message) + '</div>'; });
@@ -344,7 +349,7 @@
           who = `<select data-slot="${esc(s.id)}"><option value="">（空）</option>${opts}</select>`;
           check = `<input type="checkbox" class="confirm" data-slot="${esc(s.id)}" ${confirmed ? 'checked' : ''} ${row ? '' : 'disabled'} style="width:20px;height:20px">`;
         } else {
-          who = row ? `<a href="#" data-row="${row}">${esc(name)}</a>${p && p.tested ? ' <span class="badge b-done" style="margin:0">受測完畢</span>' : ''}` : '—';
+          who = row ? `<a href="#" data-row="${row}">${esc(name)}</a>${p && p.tested ? ' <span class="badge b-done" style="margin:0">受測完畢</span>' : ''}${s.reminded ? ` <span class="badge b-reply" style="margin:0" title="${esc(s.reminded)}">🔔 已提醒</span>` : ''}` : '—';
           check = !row ? '' : confirmed ? '<span class="badge b-done" style="margin:0">✔ 已確認</span>' : '<span class="muted">未確認</span>';
         }
         const edited = editing && (row !== s.row || confirmed !== s.confirmed);
@@ -519,8 +524,12 @@
       <label class="f" id="slotLabel">測驗時段（已排給其他人的時段不會出現）</label>
       <select id="slot">${slots.html}</select>
       ${slots.empty ? '<div class="warn">時段表已全部排滿</div>' : ''}
-      <label class="f">收件人（固定為表單填寫的 Email）</label>
-      <div class="readonly">${esc(p.email || '（未填）')}</div>
+      <label class="f">收件人（受試者填錯時可在此更正，按「儲存 Email」後生效）</label>
+      <div class="email-row">
+        <input type="text" id="emailInput" inputmode="email" autocapitalize="off" value="${esc(p.email)}" placeholder="（未填）">
+        <button class="btn" id="emailSave">儲存 Email</button>
+      </div>
+      <div class="muted" id="emailNote" style="font-size:13px"></div>
       <label class="f">主旨</label>
       <input type="text" id="subject" value="${esc(subject)}">
       <label class="f">內容（可直接修改）</label>
@@ -586,9 +595,43 @@
     const msg = t => document.getElementById('msg').textContent = t;
     const buttons = ['send', 'draft', 'assign', 'spSend', 'spDraft'].map(id => document.getElementById(id));
 
+    // 更正收件人 Email：存到試算表「更正 Email」欄，表單原始回覆不變
+    const emailInput = document.getElementById('emailInput');
+    const emailSave = document.getElementById('emailSave');
+    const showEmailNote = () => {
+      document.getElementById('emailNote').textContent =
+        p.email !== p.originalEmail ? `已更正（表單原本填寫：${p.originalEmail || '未填'}）；清空後儲存可恢復` : '';
+    };
+    showEmailNote();
+    /** 收件人欄有改但還沒儲存時不能寄信，避免寄到舊信箱 */
+    const emailUnsaved = () => {
+      if (emailInput.value.trim() === p.email) return false;
+      msg('收件人 Email 已修改但尚未儲存，請先按「儲存 Email」');
+      return true;
+    };
+    emailSave.onclick = () => {
+      const value = emailInput.value.trim();
+      if (value === p.email) { msg('Email 沒有變更'); return; }
+      if (!confirm(value ? `將 ${p.name} 的收件 Email 改為：\n${value}\n\n確定嗎？` : `清除更正，恢復為表單填寫的 Email（${p.originalEmail || '未填'}）？`)) return;
+      emailSave.disabled = true;
+      msg('儲存中…');
+      call('setEmail', [p.row, value], saved => {
+        emailSave.disabled = false;
+        p.email = saved;
+        emailInput.value = saved;
+        DATA.timetable.forEach(s => { if (s.row === p.row) s.email = saved; });
+        ['send', 'draft', 'spSend', 'spDraft'].forEach(id => document.getElementById(id).disabled = !saved);
+        showEmailNote();
+        if (body.value === generated) refresh();
+        renderList();
+        msg('已儲存收件人 Email：' + (saved || '（未填）'));
+      }, err => { emailSave.disabled = false; msg('儲存失敗：' + err.message); });
+    };
+
     function submit(mode, question) {
       const slot = slotSel.value;
       if (!slot) { msg('請先選擇時段'); return; }
+      if (mode !== 'assign' && emailUnsaved()) return;
       if (!confirm(question.replace('{slot}', slot))) return;
       buttons.forEach(b => b.disabled = true);
       msg('處理中…');
@@ -605,6 +648,7 @@
     document.getElementById('assign').onclick = () =>
       submit('assign', '只把此受試者排入時段（不寄信）：\n{slot}\n\n確定嗎？');
     function submitSpecial(mode, question) {
+      if (emailUnsaved()) return;
       if (!confirm(question)) return;
       buttons.forEach(b => b.disabled = true);
       msg('處理中…');
@@ -753,6 +797,97 @@
     });
   }
 
+  // ── 測驗前提醒信 ──
+  let remFlash = '';
+  function renderReminder(openOnMobile) {
+    view = 'reminder';
+    current = null;
+    renderList();
+    const r = DATA.reminder;
+    const c = DATA.config;
+    const main = document.getElementById('main');
+    main.innerHTML = `${BACK}
+      <h2>測驗前提醒信</h2>
+      <p class="muted">測驗開始前 ${r.minutes} 分鐘，自動寄給排在該時段的受試者（已退出者除外），每個時段只寄一次；寄出後時段表會顯示「🔔 已提醒」。</p>
+      ${r.enabled && !r.triggerActive ? '<div class="warn">⚠ 已啟用，但這個帳號沒有定時觸發條件，提醒信可能不會寄出。請再按一次「儲存設定」。</div>' : ''}
+      <label class="tested-toggle"><input type="checkbox" id="remEnabled" ${r.enabled ? 'checked' : ''}> 啟用自動寄送</label>
+      <label class="f">主旨</label>
+      <input type="text" id="remSubject" value="${esc(r.subject)}">
+      <label class="f">內容（可直接修改；{姓名} {日期} {時間} {地點} 寄出時會自動代換）</label>
+      <textarea id="remBody">${esc(r.body)}</textarea>
+      <label class="f">附加圖片（每封提醒信都會附上；最多 ${c.REMINDER_MAX_IMAGES} 張，每張 ${c.REMINDER_MAX_IMAGE_MB} MB 以內；新增 / 移除會立即生效）</label>
+      <div id="remImages"></div>
+      <input type="file" id="remFile" accept="image/*" multiple style="margin-top:6px">
+      <div class="actions">
+        <button class="btn primary" id="remSave">儲存設定</button>
+        <button class="btn" id="remTest">寄測試信給自己</button>
+      </div>
+      <div class="msg" id="remMsg" style="margin-top:6px">${esc(remFlash)}</div>`;
+    remFlash = '';
+    bindBack();
+    if (openOnMobile) { openMain(); main.scrollTop = 0; }
+
+    const rmsg = t => { const el = document.getElementById('remMsg'); if (el) el.textContent = t; };
+    const renderImages = () => {
+      const box = document.getElementById('remImages');
+      if (!box) return;
+      box.innerHTML = r.images.length
+        ? r.images.map(img => `<div class="rem-img"><span>🖼 ${esc(img.name)}</span><button class="btn sm danger" data-img="${esc(img.id)}">移除</button></div>`).join('')
+        : '<div class="muted">（目前沒有附加圖片）</div>';
+      box.querySelectorAll('button[data-img]').forEach(b => b.onclick = () => {
+        if (!confirm('移除這張圖片？')) return;
+        b.disabled = true;
+        call('removeReminderImage', [b.dataset.img], images => { r.images = images; renderImages(); rmsg('已移除圖片'); },
+          err => { b.disabled = false; rmsg('移除失敗：' + err.message); });
+      });
+    };
+    renderImages();
+
+    const fileInput = document.getElementById('remFile');
+    fileInput.onchange = () => {
+      const files = Array.from(fileInput.files);
+      fileInput.value = '';
+      /** 一張一張上傳，其中一張失敗就停止 */
+      const next = () => {
+        const file = files.shift();
+        if (!file) return;
+        if (file.size > c.REMINDER_MAX_IMAGE_MB * 1024 * 1024) { rmsg(`「${file.name}」超過 ${c.REMINDER_MAX_IMAGE_MB} MB，未上傳`); return; }
+        rmsg(`上傳「${file.name}」中…`);
+        const reader = new FileReader();
+        reader.onerror = () => rmsg(`讀取「${file.name}」失敗`);
+        reader.onload = () => call('addReminderImage', [file.name, file.type, String(reader.result).split(',')[1]], images => {
+          r.images = images;
+          renderImages();
+          rmsg(`已新增「${file.name}」`);
+          next();
+        }, err => rmsg('上傳失敗：' + err.message));
+        reader.readAsDataURL(file);
+      };
+      next();
+    };
+
+    document.getElementById('remSave').onclick = e => {
+      const settings = {
+        enabled: document.getElementById('remEnabled').checked,
+        subject: document.getElementById('remSubject').value,
+        body: document.getElementById('remBody').value,
+      };
+      e.target.disabled = true;
+      rmsg('儲存中…');
+      call('saveReminder', [settings], () => {
+        remFlash = settings.enabled ? '已儲存，自動寄送已啟用' : '已儲存，自動寄送已停用';
+        load();
+      }, err => { e.target.disabled = false; rmsg('儲存失敗：' + err.message); });
+    };
+    document.getElementById('remTest').onclick = e => {
+      e.target.disabled = true;
+      rmsg('寄送測試信中…');
+      call('sendReminderTest', [document.getElementById('remSubject').value, document.getElementById('remBody').value],
+        to => { e.target.disabled = false; rmsg('測試信已寄到 ' + to); },
+        err => { e.target.disabled = false; rmsg('寄送失敗：' + err.message); });
+    };
+  }
+
   /** 標記退出 / 恢復：退出會釋出時段，不會寄信，表單回覆資料保留 */
   function setWithdrawn(p, withdrawn, btn) {
     let reason = '';
@@ -813,6 +948,12 @@
     if (ttDraft && !confirm('放棄尚未儲存的時段表變更？')) return;
     ttDraft = null;
     renderFinance(true);
+  };
+
+  document.getElementById('remBtn').onclick = () => {
+    if (ttDraft && !confirm('放棄尚未儲存的時段表變更？')) return;
+    ttDraft = null;
+    renderReminder(true);
   };
 
   TOKEN = loadToken();
