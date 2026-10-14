@@ -17,6 +17,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+from garmin_io import GYRO_FULL_SCALE_DPS
+
 # 讓中文字能正常顯示。matplotlib 的字體管理員實際掃到的中文字體名稱是
 # "Noto Sans CJK JP"（雖然叫 JP，但字型檔本身也涵蓋繁體中文字）。
 plt.rcParams["font.sans-serif"] = ["Noto Sans CJK JP", "AR PL UMing CN", "DejaVu Sans"]
@@ -67,7 +69,8 @@ def main():
 
     time_s = [row[col_index["time_ms"]] / 1000.0 for row in samples]
 
-    # 原始資料單位為毫 G / 毫度每秒（Garmin Connect IQ Sensor API），除以 1000 轉成 G 和 度/秒
+    # 加速度原始值是毫 G，除以 1000 轉成 G；陀螺儀原始值是 int16 計數，換算見 garmin_io.py
+    gyro_scale = GYRO_FULL_SCALE_DPS / 32768.0
     acc_series = {
         "accX": [row[col_index["accX"]] / 1000.0 for row in samples],
         "accY": [row[col_index["accY"]] / 1000.0 for row in samples],
@@ -76,9 +79,9 @@ def main():
     acc_colors = {"accX": "red", "accY": "green", "accZ": "blue"}
 
     gyro_series = {
-        "gyroX": [row[col_index["gyroX"]] / 1000.0 for row in samples],
-        "gyroY": [row[col_index["gyroY"]] / 1000.0 for row in samples],
-        "gyroZ": [row[col_index["gyroZ"]] / 1000.0 for row in samples],
+        "gyroX": [row[col_index["gyroX"]] * gyro_scale for row in samples],
+        "gyroY": [row[col_index["gyroY"]] * gyro_scale for row in samples],
+        "gyroZ": [row[col_index["gyroZ"]] * gyro_scale for row in samples],
     }
     gyro_colors = {"gyroX": "red", "gyroY": "green", "gyroZ": "blue"}
 

@@ -41,7 +41,7 @@ def plot_recording(recording: str, index: pd.DataFrame):
     fig, axes = plt.subplots(2, 1, figsize=(width, 8), sharex=True, facecolor=SURFACE)
     panels = [
         (axes[0], ACC_COLS, df[ACC_COLS] / 1000.0, "加速度 (G)"),
-        (axes[1], GYRO_COLS, df[GYRO_COLS], "角速度（原始值，單位未確認）"),
+        (axes[1], GYRO_COLS, df[GYRO_COLS], "角速度（原始值，1 ≈ 0.0365 度/秒）"),
     ]
     for ax, cols, values, ylabel in panels:
         ax.set_facecolor(SURFACE)

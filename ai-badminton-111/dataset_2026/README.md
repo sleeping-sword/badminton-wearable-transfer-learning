@@ -94,7 +94,7 @@ dataset_2026/
 |---|---|
 | `time_ms` | 距離錄製開始的毫秒 |
 | `accX/Y/Z` | milli-g |
-| `gyroX/Y/Z` | 原始計數（±32764 飽和），**物理單位尚未確認** |
+| `gyroX/Y/Z` | 原始計數（±32764 飽和），1 原始值 ≈ 0.0365 度/秒（滿刻度約 ±1194 dps，2026-10-14 校正） |
 
 ## 給訓練好的模型讀
 
@@ -111,7 +111,7 @@ index = index[(index.stroke_type == "挑") & (index.flag == "")]
 X = np.stack([load_stroke_for_model("dataset_2026/" + p) for p in index.csv_path])  # (N, 125, 6)
 ```
 
-單位換算只寫在 `garmin_io.py` 一個地方，陀螺儀單位確認後改那裡的常數即可，不用重新斷拍。
+單位換算只寫在 `garmin_io.py` 一個地方，之後如果重新校正陀螺儀，只要改那裡的常數，不用重新斷拍。
 
 ## strokes_index.csv 欄位
 

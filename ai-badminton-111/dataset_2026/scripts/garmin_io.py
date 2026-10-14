@@ -29,12 +29,12 @@ WINDOW = PRE_SAMPLES + POST_SAMPLES
 # 加速度：Garmin 原始值是 milli-g → m/s²
 ACC_RAW_TO_MS2 = 9.80665 / 1000.0
 
-# ⚠️ 陀螺儀單位「尚未確認」。原始值在 ±32764 飽和，看起來是 int16 原始計數。
-# 這裡暫時假設滿刻度 ±2000 dps（換算後峰值約 34 rad/s，跟舊資料的 34.9 rad/s 接近），
-# 確認手錶端實際設定後請改這個常數。
-GYRO_FULL_SCALE_DPS = 2000.0
+# 陀螺儀：原始值是 int16 計數（±32764 飽和），1 原始值 ≈ 0.0365 度/秒，滿刻度約 ±1194 dps。
+# 2026-10-14 用 pilot/校正.json 校正（手錶繞 Y 軸翻一整圈）：陀螺儀積分 vs 重力方向轉了 359.3°，
+# 兩種算法（頭尾總角度、逐點擬合）結果相差 < 0.1%。重跑：scripts/calibrate_gyro.py
+GYRO_FULL_SCALE_DPS = 1194.0
 GYRO_RAW_TO_RAD_S = np.deg2rad(GYRO_FULL_SCALE_DPS / 32768.0)
-GYRO_UNIT_VERIFIED = False
+GYRO_UNIT_VERIFIED = True
 
 
 def load_recording(json_path) -> pd.DataFrame:
