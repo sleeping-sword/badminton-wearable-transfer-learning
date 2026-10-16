@@ -11,7 +11,7 @@
  *   - 報名人數上限：回覆數達上限時自動關閉表單
  *   - 標記受試者退出：釋出時段、從名單與統計中隱藏（資料保留，可恢復）
  *   - 特殊情況信件：資料有誤或時段已額滿時，先寄信與受試者確認（不排時段）
- *   - 「收支表」分頁：登記收入與支出（受試者費 / 教練費 / 其他）；登記受試者費會自動勾選「受測完畢」
+ *   - 「收支表」分頁：登記、編輯、刪除收入與支出（受試者費 / 教練費 / 其他）；登記受試者費會自動勾選「受測完畢」
  *   - 更正收件人 Email：受試者填錯時可在面板更正（存在「更正 Email」欄，表單原始回覆不變）
  *   - 測驗前提醒信：測驗開始前 REMINDER_MINUTES 分鐘自動寄出，文字與附加圖片可在面板修改
  *
@@ -58,7 +58,7 @@ const CONFIG = {
   ],
 
   // 測驗前提醒信（主旨、內容、附加圖片在面板「提醒信」中修改，這裡只是預設值）
-  REMINDER_MINUTES: 10, // 測驗開始前幾分鐘寄出
+  REMINDER_MINUTES: 180, // 測驗開始前幾分鐘寄出（180 = 3 小時）
   REMINDER_SUBJECT: '【羽球揮拍動作分析研究】測驗即將開始提醒',
   REMINDER_MAX_IMAGES: 5,
   REMINDER_MAX_IMAGE_MB: 5,
@@ -876,11 +876,18 @@ function setEmail(token, row, email) {
 
 // ───────────────────────── 測驗前提醒信 ─────────────────────────
 
+/** REMINDER_MINUTES 轉成文字：180 → '3 小時'、90 → '1 小時 30 分鐘'、10 → '10 分鐘' */
+function reminderLeadText_() {
+  const h = Math.floor(CONFIG.REMINDER_MINUTES / 60);
+  const m = CONFIG.REMINDER_MINUTES % 60;
+  return [h ? h + ' 小時' : '', m ? m + ' 分鐘' : ''].filter(String).join(' ');
+}
+
 function defaultReminderBody_() {
   return [
     '{姓名} 您好：',
     '',
-    '提醒您，「羽球揮拍動作分析研究」的測驗即將在 ' + CONFIG.REMINDER_MINUTES + ' 分鐘後開始：',
+    '提醒您，「羽球揮拍動作分析研究」的測驗將在 ' + reminderLeadText_() + '後開始：',
     '',
     '・測驗時間：{日期} {時間}',
     '・測驗地點：{地點}',
@@ -891,7 +898,7 @@ function defaultReminderBody_() {
   ].concat(CONFIG.SIGNATURE).join('\n');
 }
 
-/** 提醒信設定（存在 Script Properties）：{enabled, subject, body, images: [{id, name}], minutes, triggerActive} */
+/** 提醒信設定（存在 Script Properties）：{enabled, subject, body, images: [{id, name}], minutes, leadText, triggerActive} */
 function getReminderSettings_() {
   const props = PropertiesService.getScriptProperties().getProperties();
   let images = [];
@@ -902,6 +909,7 @@ function getReminderSettings_() {
     body: props.REMINDER_BODY || defaultReminderBody_(),
     images: images,
     minutes: CONFIG.REMINDER_MINUTES,
+    leadText: reminderLeadText_(),
     triggerActive: hasReminderTrigger_(),
   };
 }
@@ -1077,12 +1085,10 @@ function setTested(token, row, tested) {
 // ───────────────────────── 收支表 ─────────────────────────
 
 /**
- * 前端呼叫：新增一筆收支。
+ * 檢查前端送來的收支資料。
  * entry: {category: income|subjectFee|coachFee|other, date: 'yyyy-mm-dd', amount, row（受試者費）, purpose（收入來源 / 其他用途）, note}
- * 受試者費會自動把該受試者勾選為受測完畢。
  */
-function addFinance(token, entry) {
-  requireSession_(token);
+function checkFinance_(entry) {
   entry = entry || {};
   const cat = FINANCE_CATEGORIES[entry.category];
   if (!cat) throw new Error('未知的類別');
@@ -1093,23 +1099,54 @@ function addFinance(token, entry) {
   const purpose = String(entry.purpose || '').trim();
   if (entry.category === 'income' && !purpose) throw new Error('請填寫收入來源');
   if (entry.category === 'other' && !purpose) throw new Error('請填寫用途');
+  if (entry.category === 'subjectFee' && !entry.row) throw new Error('請選擇受試者');
+  return { category: entry.category, cat: cat, date: date, amount: amount, row: entry.row, purpose: purpose, note: String(entry.note || '').trim() };
+}
 
+/** 組出收支表的一列；需在鎖定內呼叫 */
+function financeRow_(id, e, created) {
+  const person = e.category === 'subjectFee' ? getResponse_(e.row) : null;
+  return {
+    person: person,
+    values: [
+      id, e.date, e.cat.type, e.cat.label, e.amount,
+      person ? person.name : '', person ? person.row : '',
+      e.purpose, e.note, created,
+    ],
+  };
+}
+
+/** 前端呼叫：新增一筆收支。受試者費會自動把該受試者勾選為受測完畢。 */
+function addFinance(token, entry) {
+  requireSession_(token);
+  const e = checkFinance_(entry);
   return withLock_(function () {
-    let person = null;
-    if (entry.category === 'subjectFee') {
-      if (!entry.row) throw new Error('請選擇受試者');
-      person = getResponse_(entry.row);
-    }
+    const r = financeRow_(Utilities.getUuid().slice(0, 8), e, now_());
     const sheet = getFinanceSheet_();
-    const r = sheet.getLastRow() + 1;
-    sheet.getRange(r, 1, 1, FINANCE_HEADERS.length)
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, FINANCE_HEADERS.length)
       .setNumberFormats([FINANCE_FORMATS])
-      .setValues([[
-        Utilities.getUuid().slice(0, 8), date, cat.type, cat.label, amount,
-        person ? person.name : '', person ? person.row : '',
-        purpose, String(entry.note || '').trim(), now_(),
-      ]]);
-    if (person) setTested_(person.row, true);
+      .setValues([r.values]);
+    if (r.person) setTested_(r.person.row, true);
+    return true;
+  });
+}
+
+/**
+ * 前端呼叫：修改一筆收支（編號與登記時間不變，其餘欄位覆寫）。
+ * 改成受試者費或換了受試者時，會把新的受試者勾選為受測完畢；原本的受試者不會取消勾選。
+ */
+function updateFinance(token, id, entry) {
+  requireSession_(token);
+  const e = checkFinance_(entry);
+  return withLock_(function () {
+    const sheet = getFinanceSheet_();
+    const old = parseFinance_(sheet.getDataRange().getValues()).find(function (x) { return x.id && x.id === String(id); });
+    if (!old) throw new Error('找不到這筆紀錄，請重新整理');
+    const r = financeRow_(old.id, e, old.created);
+    sheet.getRange(old.sheetRow, 1, 1, FINANCE_HEADERS.length)
+      .setNumberFormats([FINANCE_FORMATS])
+      .setValues([r.values]);
+    if (r.person) setTested_(r.person.row, true);
     return true;
   });
 }
